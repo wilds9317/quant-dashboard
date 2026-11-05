@@ -12,10 +12,57 @@ import hashlib
 import html
 import inspect
 import re
+import time
 
 import numpy as np
 import pandas as pd
 import streamlit as st
+
+# ----------------------------------------------------------------------------
+# 时间基准：Streamlit Cloud 的服务器走 UTC，所有“今天/现在”必须换算成北京时间，
+# 否则 14:30 闸门、交易日判断、自动刷新窗口在云上全部错 8 小时。
+# ----------------------------------------------------------------------------
+CN_TZ = dt.timezone(dt.timedelta(hours=8))
+
+
+def _now_cn() -> dt.datetime:
+    """当前北京时间（带时区）。"""
+    return dt.datetime.now(CN_TZ)
+
+
+def _today_cn() -> dt.date:
+    """北京时间今天。"""
+    return _now_cn().date()
+
+
+def _market_phase(now: dt.datetime | None = None) -> str:
+    """open = 连续竞价中 / break = 午休 / closed = 收盘或非交易日。"""
+    now = now or _now_cn()
+    if now.weekday() >= 5:  # 周六日
+        return "closed"
+    t = now.time()
+    if dt.time(9, 15) <= t <= dt.time(11, 30):
+        return "open"
+    if dt.time(13, 0) <= t <= dt.time(15, 0):
+        return "open"
+    if dt.time(11, 30) < t < dt.time(13, 0):
+        return "break"
+    return "closed"
+
+
+def _cache_ttl() -> int:
+    """盘中 45 秒就要新数据；午休/收盘后没必要反复打接口。"""
+    phase = _market_phase()
+    if phase == "open":
+        return 45
+    if phase == "break":
+        return 120
+    return 900
+
+
+def _cache_bucket() -> int:
+    """把时间切成桶；桶号参与缓存键，从而做到“动态 TTL”。"""
+    return int(time.time() // _cache_ttl())
 
 # 云同步依赖 cloudsync/ 与 cloud_config.py 两个本地文件。
 # 部署到 Streamlit Community Cloud 时可能只上传 app.py，缺这两个文件不能让整个页面起不来。
@@ -563,7 +610,7 @@ def _to_frame(
 def _fetch_raw(symbol: str, kind: str) -> tuple[pd.DataFrame, str]:
     """主源：东方财富。返回 (数据帧, 来源名)。"""
     code6 = symbol.split(".")[0]
-    end = dt.date.today()
+    end = _today_cn()
     start = end - dt.timedelta(days=420)
     s, e = start.strftime("%Y%m%d"), end.strftime("%Y%m%d")
 
@@ -625,12 +672,14 @@ def _metrics(frame: pd.DataFrame, symbol: str, name: str, source: str) -> dict:
 
 
 @st.cache_data(ttl=900, show_spinner=False)
-def load_all(specs: tuple[tuple[str, str, str], ...]) -> list[dict]:
+def load_all(specs: tuple[tuple[str, str, str], ...], bucket: int = 0) -> list[dict]:
     """逐个标的抓取，单只失败不影响整体。
 
     specs 是 ((代码, 名称, 类型), ...) —— 用元组做缓存键，
     列表一变缓存自动失效，不用手动 clear。
+    bucket 是时间桶（盘中 45 秒一换），让缓存能按交易/非交易时段变频率。
     """
+    del bucket  # 仅作缓存键
     results: list[dict] = []
 
     for symbol, name, kind in specs:
@@ -674,35 +723,69 @@ def load_all(specs: tuple[tuple[str, str, str], ...]) -> list[dict]:
 # ----------------------------------------------------------------------------
 # 3b. 大盘指数（上证 / 深证 / 创业板）
 # ----------------------------------------------------------------------------
-INDEX_LIST = [("000001", "上证指数"), ("399001", "深证成指"), ("399006", "创业板指")]
+INDEX_LIST = [
+    ("000001", "上证指数", "sh000001"),
+    ("399001", "深证成指", "sz399001"),
+    ("399006", "创业板指", "sz399006"),
+]
 INDEX_FORCE_RED = False   # True = 涨跌幅永远红色；False = 按 A 股习惯红涨绿跌
 
 
-@st.cache_data(ttl=120, show_spinner=False)
-def load_indices() -> list[dict]:
-    """一次请求拿三个指数，失败就返回空值，不影响主表。"""
-    empty = [{"名称": n, "点位": np.nan, "涨跌幅": np.nan} for _, n in INDEX_LIST]
-    try:
-        spot = ak.stock_zh_index_spot_em(symbol="沪深重要指数")
-        spot["代码"] = spot["代码"].astype(str).str.zfill(6)
-    except Exception:
-        return empty
-
-    out: list[dict] = []
-    for code, fallback_name in INDEX_LIST:
-        row = spot[spot["代码"] == code]
-        if row.empty:
-            out.append({"名称": fallback_name, "点位": np.nan, "涨跌幅": np.nan})
-        else:
-            r = row.iloc[0]
-            out.append(
-                {
-                    "名称": str(r["名称"]),
-                    "点位": float(r["最新价"]),
-                    "涨跌幅": float(r["涨跌幅"]),
-                }
-            )
+def _idx_from_em() -> pd.DataFrame:
+    """主源：东财「沪深重要指数」，一次请求拿全部。"""
+    spot = ak.stock_zh_index_spot_em(symbol="沪深重要指数")
+    out = spot[["代码", "名称", "最新价", "涨跌幅"]].copy()
+    out["代码"] = out["代码"].astype(str).str.zfill(6)
     return out
+
+
+def _idx_from_sina() -> pd.DataFrame:
+    """备援：新浪指数行情（代码形如 sh000001）。东财挂了就靠它。"""
+    spot = ak.stock_zh_index_spot_sina()
+    out = spot[["代码", "名称", "最新价", "涨跌幅"]].copy()
+    out["代码"] = out["代码"].astype(str).str.lower().str[-6:]
+    return out
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def load_indices(bucket: int = 0) -> tuple[list[dict], str]:
+    """三个指数的涨跌幅；主源失败自动换备援。
+
+    bucket 只用来做缓存分桶（盘中 45 秒一换），不参与计算。
+    返回 (数据, 错误说明)；错误说明为空表示正常。
+    """
+    del bucket  # 仅作缓存键
+    empty = [{"名称": n, "点位": np.nan, "涨跌幅": np.nan} for _, n, _ in INDEX_LIST]
+    errs: list[str] = []
+
+    for fetcher, tag in ((_idx_from_em, "东财"), (_idx_from_sina, "新浪")):
+        try:
+            spot = fetcher()
+        except Exception as exc:
+            errs.append(f"{tag} {type(exc).__name__}")
+            continue
+
+        rows: list[dict] = []
+        for code, fb_name, _sina in INDEX_LIST:
+            row = spot[spot["代码"] == code]
+            if row.empty:
+                rows.append({"名称": fb_name, "点位": np.nan, "涨跌幅": np.nan})
+            else:
+                r = row.iloc[0]
+                rows.append(
+                    {
+                        "名称": str(r["名称"]),
+                        "点位": float(r["最新价"]),
+                        "涨跌幅": float(r["涨跌幅"]),
+                    }
+                )
+
+        if sum(pd.notna(x["涨跌幅"]) for x in rows) >= 2:
+            return rows, ""
+        errs.append(f"{tag} 只返回 {sum(pd.notna(x['涨跌幅']) for x in rows)}/3 个")
+
+    return empty, " / ".join(errs)
+
 
 
 # ----------------------------------------------------------------------------
@@ -715,8 +798,8 @@ DISPLAY = st.session_state.get("view_mode", "auto")
 USE_CARDS = DISPLAY == "card" or (DISPLAY == "auto" and IS_MOBILE)
 
 with st.sidebar:
-    # --- 时间闸门：14:30 前禁手 ---
-    _now = dt.datetime.now()
+    # --- 时间闸门：14:30 前禁手（一律按北京时间算，云上是 UTC 服务器也一样） ---
+    _now = _now_cn()
     _cutoff = _now.replace(hour=14, minute=30, second=0, microsecond=0)
     if _now < _cutoff:
         st.markdown(
@@ -728,7 +811,17 @@ with st.sidebar:
             '<div class="gate gate-on">✅ 狙击时间，准备开火！</div>',
             unsafe_allow_html=True,
         )
-    st.caption(f"现在 {_now:%H:%M:%S} · 14:30 为分界线")
+    _phase_txt = {"open": "盘中 · 每 45 秒自动刷新", "break": "午休 · 每 2 分钟刷新", "closed": "已收盘 · 15 分钟刷新"}
+    st.caption(
+        f"现在 {_now:%H:%M:%S}（北京时间） · 14:30 为分界线\n\n"
+        f"{_phase_txt[_market_phase(_now)]}"
+    )
+    st.checkbox(
+        "盘中自动刷新",
+        value=True,
+        key="auto_refresh_on",
+        help="交易时段每 45 秒自动拉一次行情；收盘后不刷新。页面关掉就不再请求。",
+    )
 
     st.divider()
     st.markdown("#### 显示模式")
@@ -909,8 +1002,10 @@ if AK_ERROR is not None:
 
 with st.spinner("正在抓取行情数据…"):
     raw_rows = load_all(
-        tuple((w["symbol"], w["name"], w["kind"]) for w in st.session_state.watchlist)
+        tuple((w["symbol"], w["name"], w["kind"]) for w in st.session_state.watchlist),
+        _cache_bucket(),
     )
+    st.session_state["_last_load"] = time.time()   # 给自动刷新判断“距上次抓数多久”
 
 df = pd.DataFrame(raw_rows)
 
@@ -1036,7 +1131,7 @@ view = df[VIEW_COLS].copy()
 # ----------------------------------------------------------------------------
 last_dates = df["数据日期"].dropna()
 data_date = last_dates.max() if len(last_dates) else pd.NaT
-today = dt.date.today()
+today = _today_cn()
 is_stale = pd.notna(data_date) and data_date.date() < today
 
 date_txt = data_date.strftime("%Y-%m-%d") if pd.notna(data_date) else "—"
@@ -1076,12 +1171,21 @@ def _index_card(item: dict) -> str:
 
 
 with st.spinner("读取大盘指数…"):
-    index_rows = load_indices()
+    index_rows, index_err = load_indices(_cache_bucket())
 
 st.markdown(
     f'<div class="idx-row">{"".join(_index_card(i) for i in index_rows)}</div>',
     unsafe_allow_html=True,
 )
+
+# 指数取不到数时把原因说出来，避免被误当成“休市所以没有数据”
+if index_err:
+    st.caption(
+        f"⚠️ 大盘指数取数失败（{index_err}）。"
+        f"当前北京时间 {_now_cn():%H:%M}，"
+        f"{'盘中' if _market_phase() == 'open' else '非交易时段'}；"
+        "这是数据源问题，不是休市。点侧边栏「立即刷新数据」可重试。"
+    )
 
 if is_stale:
     st.info(
@@ -1342,3 +1446,29 @@ with st.expander("数据源与异常明细"):
         st.error(f"以下 {len(failed)} 只两个数据源都没取到，表格中显示为「—」：" + "、".join(failed["名称"]))
 
 st.caption("数据来源：akshare（东方财富 / 新浪）。仅供个人盯盘参考，不构成投资建议。")
+
+
+# ----------------------------------------------------------------------------
+# 11. 盘中自动刷新
+#    用 st.fragment(run_every=...) 定时触发整页重跑；只在交易时段、且用户没关掉时生效。
+#    缓存桶（_cache_bucket）保证重跑时真的会去拉新数据，而不是命中旧缓存。
+# ----------------------------------------------------------------------------
+if (
+    st.session_state.get("auto_refresh_on", True)
+    and _market_phase() in ("open", "break")
+    and hasattr(st, "fragment")
+):
+    _AUTO_SEC = _cache_ttl()
+
+    @st.fragment(run_every=_AUTO_SEC)
+    def _auto_refresh() -> None:
+        # 关键：只有“确实过了刷新间隔”才触发整页重跑。
+        # 否则每次正常渲染时 fragment 也会立刻 rerun，形成自激死循环（页面永远渲染不出来）。
+        if time.time() - st.session_state.get("_last_load", 0.0) < _AUTO_SEC - 0.5:
+            return
+        try:
+            st.rerun(scope="app")     # Streamlit >= 1.37：重跑整个脚本
+        except TypeError:             # 老版本没有 scope 参数
+            st.rerun()
+
+    _auto_refresh()
