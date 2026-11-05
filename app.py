@@ -12,6 +12,7 @@ import hashlib
 import html
 import inspect
 import json
+import random
 import re
 import time
 import urllib.parse
@@ -36,6 +37,41 @@ def _now_cn() -> dt.datetime:
 def _today_cn() -> dt.date:
     """北京时间今天。"""
     return _now_cn().date()
+
+
+# ----------------------------------------------------------------------------
+# 每日交易箴言：12 句轮值，用日期当随机种子
+# ----------------------------------------------------------------------------
+QUOTES: tuple[str, ...] = (
+    '“截断亏损，让利润奔跑。” —— 杰西·利弗莫尔',
+    '“在别人贪婪时恐惧，在别人恐惧时贪婪。” —— 沃伦·巴菲特',
+    '“重要的不是你判断对错，而是你做对时赚多少，做错时亏多少。” —— 乔治·索罗斯',
+    '“钱是坐着等来的，绝不是靠频繁操作赚来的。” —— 斯坦利·克罗',
+    '“善战者，先为不可胜，以待敌之可胜。” —— 孙子兵法',
+    '“投资的第一条准则是不要亏钱；第二条准则是永远不要忘记第一条。” —— 沃伦·巴菲特',
+    '“华尔街没有新鲜事，因为投机像山岳一样古老。” —— 杰西·利弗莫尔',
+    '“人须在事上磨，方立得住。” —— 王阳明',
+    '“如果你想获得想要的东西，那就让自己配得上它。” —— 查理·芒格',
+    '“股票市场充满了这样的人：他们知道所有东西的价格，却不知道任何东西的价值。” —— 菲利普·费雪',
+    '“交易最重要的是防守，而不是进攻。” —— 保罗·都铎·琼斯',
+    '“你永远不知道未来会发生什么，但你可以控制自己承担的风险。” —— 纳西姆·塔勒布',
+)
+
+
+def _daily_quote(day: dt.date | None = None) -> tuple[str, str]:
+    """当日箴言，返回 (句子, 出处)。
+
+    用「YYYY-MM-DD」这个字符串当随机种子 —— 同一天永远抽到同一句，怎么刷新都不变；
+    日期一变（过零点）种子就变，自动换新，不需要任何持久化。
+
+    为什么不用 day.toordinal()：那是一个逐日 +1 的连续整数，CPython 对这种小整数种子
+    的初始化高度相关，实测 14 天只轮出 6~7 句、还会连续两天撞同一句。
+    换成日期字符串（Random 对 str 走 sha512 派生），14 天能轮出 10 句且不撞车。
+    """
+    day = day or _today_cn()
+    line = random.Random(day.strftime("%Y-%m-%d")).choice(QUOTES)
+    quote, sep, author = line.partition("——")
+    return quote.strip(), author.strip() if sep else ""
 
 
 def _market_phase(now: dt.datetime | None = None) -> str:
@@ -423,6 +459,22 @@ HERO_D = "rgba(236,239,243,.55)" if DARK else "rgba(18,33,26,.62)"
 HERO_M = "rgba(236,239,243,.24)" if DARK else "rgba(18,33,26,.36)"
 HERO_LINE = "rgba(255,255,255,.07)" if DARK else "rgba(18,33,26,.12)"
 
+# 每日箴言卡：深色主题走暗绿夜色，浅色主题走柔绿纸感（两边都用绿色系，不跑偏）
+Q_BG = (
+    "linear-gradient(160deg, rgba(30,72,45,.60) 0%, rgba(11,26,17,.55) 100%)"
+    if DARK
+    else "linear-gradient(160deg, #f2faec 0%, #e3f2d8 100%)"
+)
+Q_BORDER = "rgba(130,205,160,.22)" if DARK else "rgba(31,77,46,.14)"
+Q_TXT = "#e2ece5" if DARK else "#1b3a25"
+Q_AU = "rgba(158,198,170,.66)" if DARK else "rgba(27,58,37,.55)"
+Q_LABEL = "#84c99e" if DARK else "#3f7d55"
+Q_RIBBON = (
+    "linear-gradient(180deg, #55ad72 0%, #2f7b4a 100%)"
+    if DARK
+    else "linear-gradient(180deg, #6cbb85 0%, #3d8a57 100%)"
+)
+
 st.markdown(
     """
 <style>
@@ -475,6 +527,32 @@ st.markdown(
       letter-spacing: .10em; font-variant-numeric: tabular-nums;
   }
   .hero-m { font-size: 11.5px; color: __HERO_M__; margin-top: 7px; letter-spacing: .06em; }
+  /* ---------- 每日交易箴言：柔绿卡片 + 书签缎带 ---------- */
+  .quote {
+      position: relative; display: flex; align-items: flex-start; gap: 13px;
+      padding: 15px 22px 15px 20px; margin: 0 0 18px 0;
+      border-radius: 14px; border: 1px solid __Q_BORDER__;
+      background-image: __Q_BG__;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.16);
+  }
+  /* 书签：右上角垂下来的小缎带，底部剪一个 V 口 */
+  .quote::before {
+      content: ""; position: absolute; right: 24px; top: -1px;
+      width: 20px; height: 15px; border-radius: 2px 2px 0 0;
+      background-image: __Q_RIBBON__;
+      clip-path: polygon(0 0, 100% 0, 100% 100%, 50% 62%, 0 100%);
+  }
+  .quote-ic { font-size: 19px; line-height: 1.45; flex: none; }
+  .quote-b { min-width: 0; }
+  .quote-l {
+      font-size: 10.5px; font-weight: 700; letter-spacing: .16em;
+      color: __Q_LABEL__; margin-bottom: 6px;
+  }
+  .quote-t {
+      font-size: 14px; font-style: italic; color: __Q_TXT__;
+      line-height: 1.75; letter-spacing: .02em;
+  }
+  .quote-a { font-size: 11.5px; color: __Q_AU__; margin-top: 5px; letter-spacing: .04em; }
   .kpi-row { display: flex; gap: 12px; margin-bottom: 18px; flex-wrap: wrap; }
   .kpi { flex: 1 1 0; min-width: 150px; padding: 15px 17px; border-radius: 13px; }
   .kpi-l {
@@ -760,6 +838,9 @@ st.markdown(
       .hero-r { text-align: left; display: flex; align-items: baseline; gap: 8px; margin-top: 2px; }
       .hero-d { display: none; }   /* 手机端只留「数据日期」一行，避免同一个日期出现两次 */
       .hero-m { font-size: 10.5px; margin-top: 0; }
+      .quote { padding: 13px 16px; gap: 10px; margin-bottom: 14px; border-radius: 12px; }
+      .quote-t { font-size: 13px; line-height: 1.7; }
+      .quote::before { right: 16px; width: 17px; height: 13px; }
       /* 三个指数挤在一行，不变成三条大块 */
       .idx-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
       .idx {
@@ -799,7 +880,13 @@ st.markdown(
     .replace("__HERO_S__", HERO_S)
     .replace("__HERO_D__", HERO_D)
     .replace("__HERO_M__", HERO_M)
-    .replace("__HERO_LINE__", HERO_LINE),
+    .replace("__HERO_LINE__", HERO_LINE)
+    .replace("__Q_BG__", Q_BG)
+    .replace("__Q_BORDER__", Q_BORDER)
+    .replace("__Q_TXT__", Q_TXT)
+    .replace("__Q_AU__", Q_AU)
+    .replace("__Q_LABEL__", Q_LABEL)
+    .replace("__Q_RIBBON__", Q_RIBBON),
     unsafe_allow_html=True,
 )
 
@@ -1628,6 +1715,19 @@ st.markdown(
   </div>
 </div>
 """,
+    unsafe_allow_html=True,
+)
+
+# --- 每日交易箴言：日期做种子，同一天刷新不变，过零点自动换 ---
+_q_text, _q_author = _daily_quote(today)
+st.markdown(
+    f'<div class="quote">'
+    f'<div class="quote-ic">💡</div>'
+    f'<div class="quote-b">'
+    f'<div class="quote-l">每日交易箴言</div>'
+    f'<div class="quote-t">{html.escape(_q_text)}</div>'
+    f'<div class="quote-a">—— {html.escape(_q_author)}</div>'
+    f"</div></div>",
     unsafe_allow_html=True,
 )
 
