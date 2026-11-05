@@ -1,5 +1,5 @@
 """
-金工生的量价盯盘仪表盘
+学徒成长目录
 ------------------------------------------------------------
 数据源：akshare（东方财富为主，新浪备援，双源兜底）
 运行：streamlit run app.py
@@ -172,7 +172,7 @@ def _detect_mobile() -> bool:
 IS_MOBILE = _detect_mobile()
 
 st.set_page_config(
-    page_title="金工生的量价盯盘仪表盘",
+    page_title="学徒成长目录",
     page_icon="📈",
     layout="wide",  # 宽屏：手机上也占满整宽，不留两侧空白
     # 手机上侧边栏展开会遮住整屏，默认收起；点左上角箭头才拉出来
@@ -1572,7 +1572,7 @@ st.markdown(
     f"""
 <div class="hero">
   <div>
-    <div class="hero-t">金工生的量价盯盘仪表盘</div>
+    <div class="hero-t">学徒成长目录</div>
     <div class="hero-s">A股 · ETF 双市场 · {len(view)} 个标的（可自定义） · 均线结构 + 量价狙击 + 持仓盈亏监控</div>
   </div>
   <div class="hero-r">
