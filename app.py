@@ -50,6 +50,47 @@ def _market_phase(now: dt.datetime | None = None) -> str:
     return "closed"
 
 
+# ----------------------------------------------------------------------------
+# 狙击时间窗：只有 14:30:00 ~ 14:50:00 这一段是绿色可开火，其余一律红色禁手。
+# ----------------------------------------------------------------------------
+SNIPE_START = dt.time(14, 30)
+SNIPE_END = dt.time(14, 50)
+
+
+def _fmt_left(sec: int) -> str:
+    """把剩余秒数说成人话。"""
+    sec = max(0, int(sec))
+    h, rem = divmod(sec, 3600)
+    m, s = divmod(rem, 60)
+    if h:
+        return f"{h} 小时 {m} 分"
+    if m:
+        return f"{m} 分 {s} 秒"
+    return f"{s} 秒"
+
+
+def _snipe_gate(now: dt.datetime | None = None) -> dict:
+    """判断当前是否处在狙击时间窗内，并算出离边界还有多久。
+
+    返回 {"active": bool, "hint": str}
+    active=True  → 绿色，可以开火（14:30 ≤ t < 14:50）
+    active=False → 红色，管住手（其余全部时间，含周末）
+    """
+    now = now or _now_cn()
+    start = now.replace(hour=14, minute=30, second=0, microsecond=0)
+    end = now.replace(hour=14, minute=50, second=0, microsecond=0)
+
+    if now.weekday() >= 5:  # 周六日不开市，倒计时没意义
+        return {"active": False, "hint": "周末休市 · 下个交易日再战"}
+
+    t = now.time()
+    if SNIPE_START <= t < SNIPE_END:
+        return {"active": True, "hint": f"窗口剩余 {_fmt_left((end - now).total_seconds())}"}
+    if t < SNIPE_START:
+        return {"active": False, "hint": f"距开火还有 {_fmt_left((start - now).total_seconds())}"}
+    return {"active": False, "hint": "今日窗口已结束 · 明天 14:30 再来"}
+
+
 def _cache_ttl() -> int:
     """盘中 45 秒就要新数据；午休/收盘后没必要反复打接口。"""
     phase = _market_phase()
@@ -444,11 +485,28 @@ st.markdown(
       font-variant-numeric: tabular-nums; white-space: nowrap; letter-spacing: .02em;
   }
   .gate {
-      padding: 12px 16px; border-radius: 10px; margin-bottom: 14px;
-      font-size: 15px; font-weight: 700; letter-spacing: .5px; color: #fff;
+      padding: 11px 14px 10px; border-radius: 12px; margin-bottom: 12px;
+      color: #fff; display: flex; flex-direction: column; gap: 5px;
   }
-  .gate-off { background: #d92d20; box-shadow: 0 0 0 1px rgba(217,45,32,.35); }
-  .gate-on  { background: #15803d; box-shadow: 0 0 0 1px rgba(21,128,61,.35); }
+  .gate-t { font-size: 14.5px; font-weight: 700; letter-spacing: .3px; line-height: 1.25; }
+  .gate-h {
+      font-size: 11.5px; font-weight: 600; letter-spacing: .02em;
+      color: rgba(255,255,255,.80); font-variant-numeric: tabular-nums;
+  }
+  .gate-off {
+      background: linear-gradient(160deg, #b42318 0%, #d92d20 100%);
+      box-shadow: 0 0 0 1px rgba(217,45,32,.38), 0 10px 24px -14px rgba(217,45,32,.85);
+  }
+  .gate-on {
+      background: linear-gradient(160deg, #15803d 0%, #16a34a 100%);
+      box-shadow: 0 0 0 1px rgba(21,128,61,.42), 0 10px 24px -14px rgba(22,163,74,.85);
+      animation: gate-pulse 2.4s ease-in-out infinite;
+  }
+  /* 绿色窗口期间呼吸：像在倒数等你扣扳机 */
+  @keyframes gate-pulse {
+      0%, 100% { box-shadow: 0 0 0 1px rgba(21,128,61,.42), 0 0 0 0 rgba(22,163,74,.42); }
+      50%      { box-shadow: 0 0 0 1px rgba(21,128,61,.62), 0 0 0 7px rgba(22,163,74,0); }
+  }
 
   /* ================= 叶子卡片（大自然主题） ================= */
   .mcards {
@@ -645,7 +703,9 @@ st.markdown(
       .sniper-t { font-size: 16px; }
       .sniper-idle { padding: 10px 12px; font-size: 12px; }
       .sniper-item { font-size: 12px; padding: 4px 9px; }
-      .gate { font-size: 13.5px; padding: 10px 12px; }
+      .gate { padding: 10px 12px 9px; border-radius: 10px; }
+      .gate-t { font-size: 13.5px; }
+      .gate-h { font-size: 11px; }
       /* 侧边栏宽度别顶满屏幕，留出关闭区域 */
       section[data-testid="stSidebar"] { min-width: 0 !important; width: 88vw !important; }
       section[data-testid="stSidebar"] .block-container { padding: 0.7rem 0.8rem !important; }
@@ -964,23 +1024,23 @@ DISPLAY = st.session_state.get("view_mode", "card")
 USE_CARDS = DISPLAY == "card" or (DISPLAY == "auto" and IS_MOBILE)
 
 with st.sidebar:
-    # --- 时间闸门：14:30 前禁手（一律按北京时间算，云上是 UTC 服务器也一样） ---
+    # --- 时间闸门：只有 14:30–14:50 是绿色开火窗，其余时间一律红色禁手 ---
+    # 一律按北京时间算，云上服务器是 UTC 也不会错 8 小时
     _now = _now_cn()
-    _cutoff = _now.replace(hour=14, minute=30, second=0, microsecond=0)
-    if _now < _cutoff:
-        st.markdown(
-            '<div class="gate gate-off">❌ 禁手时间，管住手！</div>',
-            unsafe_allow_html=True,
-        )
-    else:
-        st.markdown(
-            '<div class="gate gate-on">✅ 狙击时间，准备开火！</div>',
-            unsafe_allow_html=True,
-        )
-    _phase_txt = {"open": "盘中 · 每 45 秒自动刷新", "break": "午休 · 每 2 分钟刷新", "closed": "已收盘 · 15 分钟刷新"}
+    _gate = _snipe_gate(_now)
+    st.markdown(
+        f'<div class="gate {"gate-on" if _gate["active"] else "gate-off"}">'
+        f'<div class="gate-t">'
+        f'{"✅ 狙击时间，准备开火！" if _gate["active"] else "❌ 禁手时间，管住手！"}'
+        f"</div>"
+        f'<div class="gate-h">{_gate["hint"]}</div>'
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+    _phase_short = {"open": "盘中", "break": "午休", "closed": "已收盘"}
     st.caption(
-        f"现在 {_now:%H:%M:%S}（北京时间） · 14:30 为分界线\n\n"
-        f"{_phase_txt[_market_phase(_now)]}"
+        f"现在 {_now:%H:%M:%S}（北京时间）\n\n"
+        f"狙击窗口 14:30–14:50 · {_phase_short[_market_phase(_now)]}"
     )
     st.checkbox(
         "盘中自动刷新",
