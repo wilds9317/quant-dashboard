@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import base64
 import datetime as dt
 import hashlib
 import html
@@ -177,17 +178,10 @@ def _cache_bucket() -> int:
     """把时间切成桶；桶号参与缓存键，从而做到“动态 TTL”。"""
     return int(time.time() // _cache_ttl())
 
-# 云同步依赖 cloudsync/ 与 cloud_config.py 两个本地文件。
-# 部署到 Streamlit Community Cloud 时可能只上传 app.py，缺这两个文件不能让整个页面起不来。
-try:
-    import cloudsync
-    from cloud_config import CLOUD_CONFIG
-
-    CLOUD_READY = True
-except Exception:  # 缺文件 / 缺依赖都走这里
-    cloudsync = None
-    CLOUD_CONFIG = None
-    CLOUD_READY = False
+# 成本持久化只走「写进网址」这一条路（见 _encode_costs / _share_link）。
+# 早先那版依赖 WorkBuddy 云服务的登录组件（cloudsync/ + cloud_config.py）需要绑定
+# 特定域名，部署到 Streamlit Community Cloud 上永远拿不到登录态，已停用；
+# 目录留着不影响运行，哪天换回配套域名可以再启用。
 
 
 def _detect_mobile() -> bool:
@@ -205,15 +199,19 @@ def _detect_mobile() -> bool:
     )
 
 
-IS_MOBILE = _detect_mobile()
-
+# st.set_page_config 必须是第一条 Streamlit 命令，那时 st.context.headers 还没注入。
+# 这里踩过一个坑：在 set_page_config 之前调 st.context.headers，不仅那次读不到，
+# 之后整个脚本都读不到（UA 判断永远返回桌面端）。所以 UA 只能在 set_page_config 之后读，
+# 而侧栏初始状态交给 "auto"——它由前端按屏幕宽度自己决定，窄屏自动收起。
 st.set_page_config(
     page_title="学徒成长目录",
     page_icon="📈",
     layout="wide",  # 宽屏：手机上也占满整宽，不留两侧空白
-    # 手机上侧边栏展开会遮住整屏，默认收起；点左上角箭头才拉出来
-    initial_sidebar_state="collapsed" if IS_MOBILE else "expanded",
+    initial_sidebar_state="auto",
 )
+
+# 放在 set_page_config 之后，这次 UA 一定能读到
+IS_MOBILE = _detect_mobile()
 
 
 def _full_width(func) -> dict:
@@ -261,11 +259,11 @@ SORT_MODES = {
     "pnl": "盈亏比例 ↓",
 }
 
-# 展示形式：默认全部用叶子卡片；表格只作为可选项保留
+# 展示形式：默认卡片；表格只作为可选项保留
 VIEW_MODES = {
-    "card": "🍃 叶子卡片（默认）",
+    "card": "卡片（默认）",
     "auto": "自动（按设备判断）",
-    "table": "表格（冷冰冰的数字）",
+    "table": "表格",
 }
 
 
@@ -357,6 +355,89 @@ def _parse_watchlist(raw: str) -> list[dict]:
     return out
 
 
+def _encode_costs(costs: dict) -> str:
+    """成本字典 → 可塞进网址的短串。
+
+    只保留真正有值的项（填 0 等于没填），价格压到 3 位小数，键排序后 base64，
+    9 只标的大约 120 个字符，加在 ?c= 后面完全不影响链接可用。
+    """
+    slim = {}
+    for k, v in (costs or {}).items():
+        try:
+            f = float(v or 0)
+        except (TypeError, ValueError):
+            continue
+        if f > 0:
+            slim[str(k)] = round(f, 3)
+    if not slim:
+        return ""
+    raw = json.dumps(slim, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+    return base64.urlsafe_b64encode(raw.encode("utf-8")).decode().rstrip("=")
+
+
+def _decode_costs(raw: str) -> dict:
+    """网址短串 → 成本字典。任何异常都返回空，脏参数不能把页面打挂。"""
+    text = str(raw or "").strip()
+    if not text:
+        return {}
+    try:
+        pad = "=" * (-len(text) % 4)
+        data = json.loads(base64.urlsafe_b64decode(text + pad).decode("utf-8"))
+        if not isinstance(data, dict):
+            return {}
+        out = {}
+        for k, v in data.items():
+            try:
+                f = float(v)
+            except (TypeError, ValueError):
+                continue
+            if f > 0:
+                out[str(k)] = f
+        return out
+    except Exception:
+        return {}
+
+
+def _sync_costs_url() -> None:
+    """把成本写进地址栏。值没变就不碰，避免每次 rerun 都去改 URL。"""
+    try:
+        want = _encode_costs(st.session_state.get("costs", {}))
+        cur = st.query_params.get("c", "") or ""
+        if want == cur:
+            return
+        if want:
+            st.query_params["c"] = want
+        elif "c" in st.query_params:
+            del st.query_params["c"]
+    except Exception:
+        pass  # 老版本 Streamlit 没有 query_params，静默降级
+
+
+def _share_link() -> str:
+    """拼出当前完整访问地址（带列表 + 成本），用来发到手机。"""
+    try:
+        params = dict(st.query_params.to_dict())
+    except Exception:
+        return ""
+    # 跟默认值一样的参数不用带，链接能短一截
+    if str(params.get("view") or "") == "card":
+        params.pop("view", None)
+    if str(params.get("sort") or "") == "signal":
+        params.pop("sort", None)
+    if not params:
+        return ""
+    qs = urllib.parse.urlencode(params, safe=",.-_")
+    host = ""
+    try:
+        host = str(st.context.headers.get("Host", "") or "")
+    except Exception:
+        host = ""
+    if not host:
+        return f"?{qs}"
+    local = any(x in host for x in ("localhost", "127.0.0.1", "0.0.0.0"))
+    return f"{'http' if local else 'https'}://{host}/?{qs}"
+
+
 def _sync_url() -> None:
     """把列表和排序方式同步到地址栏，这样按 F5 刷新也能恢复（轻量持久化）。"""
     try:
@@ -383,6 +464,8 @@ def _sync_url() -> None:
     except Exception:
         pass  # 老版本 Streamlit 没有 query_params，忽略即可
 
+    _sync_costs_url()
+
 
 def _init_state() -> None:
     """初始化会话状态：刷新后从 URL 恢复，否则用默认 9 只。"""
@@ -399,7 +482,10 @@ def _init_state() -> None:
         wanted_v = st.query_params.get("view", "card")
         st.session_state.view_mode = wanted_v if wanted_v in VIEW_MODES else "card"
 
-    st.session_state.setdefault("costs", {})
+    # 成本同样从 URL 恢复：手机切后台被杀、电脑关浏览器，回来都还在
+    if "costs" not in st.session_state:
+        st.session_state.costs = _decode_costs(st.query_params.get("c", ""))
+
     st.session_state.setdefault("wl_msg", None)
     st.session_state.setdefault("add_rev", 0)
     st.session_state.setdefault("cloud_rev", 0)
@@ -570,11 +656,7 @@ st.markdown(
       display: flex; gap: 14px; align-items: center; flex-wrap: wrap;
       padding: 14px 20px; margin: 0 0 16px 0; border-radius: 12px;
       border: 1px solid __SN_BORDER__; background: rgba(255,75,75,.10);
-      animation: sniper-pulse 2.4s ease-in-out infinite;
-  }
-  @keyframes sniper-pulse {
-      0%, 100% { box-shadow: 0 0 0 1px rgba(255,75,75,.10), 0 0 14px rgba(255,75,75,.14); }
-      50%      { box-shadow: 0 0 0 1px rgba(255,75,75,.28), 0 0 26px rgba(255,75,75,.32); }
+      box-shadow: 0 0 0 1px rgba(255,75,75,.18), 0 0 18px rgba(255,75,75,.16);
   }
   .sniper-t {
       font-size: 19px; font-weight: 700; letter-spacing: .6px;
@@ -646,7 +728,6 @@ st.markdown(
   .gate-on {
       background: linear-gradient(160deg, #15803d 0%, #16a34a 100%);
       box-shadow: 0 0 0 1px rgba(21,128,61,.42), 0 10px 24px -14px rgba(22,163,74,.85);
-      animation: gate-pulse 2.4s ease-in-out infinite;
   }
   /* 已收盘 / 未开盘：灰色，别再喊开火了 */
   .gate-idle {
@@ -654,13 +735,8 @@ st.markdown(
       box-shadow: 0 0 0 1px rgba(255,255,255,.10), 0 10px 24px -16px rgba(0,0,0,.9);
   }
   .gate-idle .gate-h { color: rgba(255,255,255,.62); }
-  /* 绿色窗口期间呼吸：像在倒数等你扣扳机 */
-  @keyframes gate-pulse {
-      0%, 100% { box-shadow: 0 0 0 1px rgba(21,128,61,.42), 0 0 0 0 rgba(22,163,74,.42); }
-      50%      { box-shadow: 0 0 0 1px rgba(21,128,61,.62), 0 0 0 7px rgba(22,163,74,0); }
-  }
 
-  /* ================= 叶子卡片（大自然主题） ================= */
+  /* ================= 标的卡片 ================= */
   .mcards {
       display: grid; gap: 14px; margin-bottom: 12px;
       grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr));
@@ -668,58 +744,18 @@ st.markdown(
   .mcard {
       position: relative; overflow: hidden;
       padding: 14px 16px 13px;
-      /* 左下角收成叶尖：24px 圆角 + 6px 尖角 */
-      border-radius: 24px 24px 24px 6px;
+      border-radius: 16px;
       color: #16351f;
       font-family: -apple-system, "SF Pro Text", "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
-      background-image:
-          radial-gradient(120% 95% at 100% 0%, rgba(255,255,255,.9) 0%, rgba(255,255,255,0) 58%),
-          linear-gradient(160deg, #f0fbe9 0%, #dcf2d2 52%, #c6e6ba 100%);
-      border: 1px solid rgba(31,77,46,.16);
-      box-shadow:
-          inset 0 1px 0 rgba(255,255,255,.95),
-          0 10px 26px -14px rgba(21,54,32,.45);
-      animation: leaf-in .4s cubic-bezier(.2,.8,.3,1) both;
-  }
-  /* 叶脉：一道斜向细线，从叶尖通向右上 */
-  .mcard::before {
-      content: ""; position: absolute; inset: 0; pointer-events: none;
-      background: linear-gradient(118deg,
-          transparent 44%,
-          rgba(31,77,46,.075) 45%,
-          rgba(31,77,46,.075) 45.6%,
-          transparent 46.6%);
-  }
-  /* 右上角淡出的叶片水印（放右下，别压住标签） */
-  .mcard::after {
-      content: "🍃"; position: absolute; bottom: -14px; right: -10px;
-      font-size: 52px; opacity: .10; transform: rotate(-14deg);
-      pointer-events: none;
-  }
-  @keyframes leaf-in {
-      from { opacity: 0; transform: translateY(8px) scale(.985); }
-      to   { opacity: 1; transform: none; }
+      background: linear-gradient(170deg, #f3faf0 0%, #e2f1d9 100%);
+      border: 1px solid rgba(31,77,46,.14);
+      box-shadow: 0 2px 10px -6px rgba(21,54,32,.32);
   }
 
-  /* 狙击命中：红边呼吸 + 红光外溢 */
+  /* 显著异动：静态红边，不再呼吸闪烁 */
   .mcard.hit {
-      border: 1.5px solid rgba(225,29,72,.85);
-      animation: leaf-in .4s cubic-bezier(.2,.8,.3,1) both,
-                 leaf-alert 1.4s ease-in-out .4s infinite;
-  }
-  @keyframes leaf-alert {
-      0%, 100% {
-          box-shadow: inset 0 1px 0 rgba(255,255,255,.95),
-                      0 0 0 1px rgba(225,29,72,.30),
-                      0 0 16px rgba(225,29,72,.30),
-                      0 10px 26px -14px rgba(21,54,32,.45);
-      }
-      50% {
-          box-shadow: inset 0 1px 0 rgba(255,255,255,.95),
-                      0 0 0 3px rgba(225,29,72,.55),
-                      0 0 34px rgba(225,29,72,.60),
-                      0 10px 26px -14px rgba(21,54,32,.45);
-      }
+      border: 1.5px solid rgba(225,29,72,.70);
+      box-shadow: 0 0 0 1px rgba(225,29,72,.16), 0 2px 12px -6px rgba(225,29,72,.45);
   }
 
   .mcard-h {
@@ -744,58 +780,40 @@ st.markdown(
       box-shadow: inset 0 0 0 1px rgba(31,77,46,.08);
   }
 
-  /* ---------- 卡片里的精灵 ---------- */
+  /* ---------- 卡片里的状态图标（静态，不做动画） ---------- */
   .pet {
-      font-size: 27px; line-height: 1; display: block;
+      font-size: 25px; line-height: 1; display: block;
       font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
   }
-  .pet-deer   { animation: deer-hop 1.5s ease-in-out infinite; }
-  .pet-turtle { animation: turtle-walk 3.4s ease-in-out infinite; }
-  .pet-cheetah {
-      animation: cheetah-prowl 1.15s ease-in-out infinite;
-      filter: drop-shadow(0 0 7px rgba(225,29,72,.9)) drop-shadow(0 0 15px rgba(225,29,72,.55));
-  }
-  .pet-flat { opacity: .6; filter: grayscale(.3); }
-  /* 精灵站的小圆台：多头绿底、空头红底、狙击红光大底 */
+  .pet-flat { opacity: .62; }
+  /* 状态圆台：多头绿底、空头红底、显著异动红底 */
   .pet-chip {
       display: inline-flex; align-items: center; justify-content: center;
-      width: 42px; height: 42px; border-radius: 50%; flex: none;
-      background: rgba(21,128,61,.13);
-      box-shadow: inset 0 0 0 1px rgba(21,128,61,.22);
+      width: 40px; height: 40px; border-radius: 50%; flex: none;
+      background: rgba(21,128,61,.12);
+      box-shadow: inset 0 0 0 1px rgba(21,128,61,.20);
   }
   .pet-chip.bear {
-      background: rgba(217,45,32,.12);
-      box-shadow: inset 0 0 0 1px rgba(217,45,32,.24);
+      background: rgba(217,45,32,.11);
+      box-shadow: inset 0 0 0 1px rgba(217,45,32,.22);
   }
   .pet-chip.hit {
-      background: rgba(225,29,72,.16);
-      box-shadow: inset 0 0 0 1px rgba(225,29,72,.42),
-                  0 0 18px rgba(225,29,72,.45);
+      background: rgba(225,29,72,.14);
+      box-shadow: inset 0 0 0 1px rgba(225,29,72,.38);
   }
   .pet-chip.flat {
       background: rgba(31,77,46,.07);
       box-shadow: inset 0 0 0 1px rgba(31,77,46,.12);
   }
 
-  @keyframes deer-hop {
-      0%, 100% { transform: translateY(0) rotate(-3deg); }
-      38%      { transform: translateY(-7px) rotate(3deg); }
-      62%      { transform: translateY(-4px) rotate(1deg); }
+  /* 异动标记：只用文字和小方块，不加光不加动效 */
+  .mcard-z {
+      font-size: 10.5px; font-weight: 700; letter-spacing: .02em;
+      padding: 2px 7px; border-radius: 5px; white-space: nowrap;
+      font-variant-numeric: tabular-nums;
   }
-  @keyframes turtle-walk {
-      0%, 100% { transform: translateX(-2px) rotate(-4deg); }
-      50%      { transform: translateX(2px) rotate(4deg); }
-  }
-  @keyframes cheetah-prowl {
-      0%, 100% {
-          transform: translateY(0) scale(1);
-          filter: drop-shadow(0 0 6px rgba(225,29,72,.85));
-      }
-      50% {
-          transform: translateY(-3px) scale(1.10);
-          filter: drop-shadow(0 0 18px rgba(225,29,72,1));
-      }
-  }
+  .mcard-z.up   { background: rgba(217,45,32,.14); color: #b42318; }
+  .mcard-z.down { background: rgba(21,128,61,.14); color: #15803d; }
 
   .mcard-p {
       display: flex; align-items: center; gap: 10px;
@@ -1184,6 +1202,24 @@ def _metrics(
     real_name = (quote.get("名称") or "").strip() if live else ""
     note = "" if live else "实时快照缺失，用日线兜底"
 
+    # 波动率：近 20 个交易日「日收益」的标准差，衡量这只票自己的日常振幅。
+    # 有了它才能回答「今天涨 5% 对这只票算不算异常」——
+    # 固定 21% 的阈值只能拦住数据源串行，拦不住「平时很安静的票突然动了一下」。
+    sigma = np.nan
+    try:
+        rets = close.pct_change().dropna()
+        if live and len(rets) > 21:
+            rets = rets.iloc[:-1]   # 剔掉含今天的那一项，否则今天的异动会稀释自己的分母
+        if len(rets) >= 15:
+            sigma = float(rets.tail(20).std() * 100)
+    except Exception:
+        sigma = np.nan
+
+    # 异动倍数：今天的涨跌幅相当于它自己几个「日常波动」
+    z = np.nan
+    if np.isfinite(sigma) and sigma > 0.15 and np.isfinite(chg):
+        z = float(chg) / sigma
+
     return {
         "代码": symbol,
         "名称": name or real_name,
@@ -1193,6 +1229,8 @@ def _metrics(
         "量比": vol_ratio,
         "MA5": float(close.rolling(5).mean().iloc[-1]) if len(close) >= 5 else np.nan,
         "MA20": float(close.rolling(20).mean().iloc[-1]) if len(close) >= 20 else np.nan,
+        "波动率": sigma,
+        "异动z": z,
         "数据日期": data_date,
         "数据源": quote["来源"] if live else source,
         "备注": note,
@@ -1272,6 +1310,8 @@ def load_all(specs: tuple[tuple[str, str, str], ...], bucket: int = 0) -> list[d
                 "量比": quote["量比"],
                 "MA5": np.nan,
                 "MA20": np.nan,
+                "波动率": np.nan,
+                "异动z": np.nan,
                 "数据日期": pd.Timestamp(_today_cn()),
                 "数据源": quote["来源"],
                 "备注": "日线缺失，均线不可用",
@@ -1287,6 +1327,8 @@ def load_all(specs: tuple[tuple[str, str, str], ...], bucket: int = 0) -> list[d
                 "量比": np.nan,
                 "MA5": np.nan,
                 "MA20": np.nan,
+                "波动率": np.nan,
+                "异动z": np.nan,
                 "数据日期": pd.NaT,
                 "数据源": "—",
                 "备注": " / ".join(errors),
@@ -1419,8 +1461,8 @@ with st.sidebar:
     )
     st.caption(
         f"当前{'手机' if IS_MOBILE else '电脑'}端，正在用"
-        f"{'叶子卡片 🍃' if USE_CARDS else '表格'}展示。"
-        "卡片里的小鹿会跳、猎豹会发光，表格只有数字。"
+        f"{'卡片' if USE_CARDS else '表格'}展示。"
+        "卡片把关键指标摊开，表格适合横向比对。"
     )
 
     st.divider()
@@ -1527,45 +1569,59 @@ with st.sidebar:
     for _, _row in edited.iterrows():
         _costs[str(_row["代码"])] = float(_row["持仓成本"] or 0.0)
 
+    # 成本一变就写进地址栏：手机/电脑各自打开同一条链接都是同一份成本
+    _sync_costs_url()
+
     if st.session_state.cloud_flash:
         _tone, _text = st.session_state.cloud_flash
         (st.success if _tone == "ok" else st.caption)(_text)
 
     st.divider()
-    st.markdown("#### 云同步")
-    if not CLOUD_READY:
-        st.caption("云同步模块未随本次部署上传，改用本地会话保存成本（关掉浏览器会清空）。")
+    st.markdown("#### 成本同步")
+    st.caption(
+        "成本跟着**网址**走（地址栏里的 `?c=…`）。同一条链接在电脑和手机打开，"
+        "看到的成本一模一样；关掉浏览器、手机切后台回来，也都还在。"
+    )
+
+    _link = _share_link()
+    if _link:
+        st.text_input(
+            "手机打开这条链接",
+            _link,
+            key=f"share_box_{hashlib.md5(_link.encode()).hexdigest()[:10]}",
+            help="点一下输入框全选，复制后发到微信，手机点开就是同一份数据。",
+        )
+        st.caption("任一端改完成本，地址栏会自动更新；把新链接重新发一次，两端就对齐了。")
     else:
-        st.caption("登录后把成本存到云端，换设备或清缓存都不会丢。")
+        st.caption("在上面填好成本，这里就会出现可以复制的链接。")
 
-        local_costs = [
-            {"symbol": str(row["代码"]), "cost": float(row["持仓成本"] or 0.0)}
-            for _, row in edited.iterrows()
-        ]
-        cloud_state = cloudsync.cloud_sync_panel(config=CLOUD_CONFIG, costs=local_costs)
-
-        # 只处理新回传（避免每次 rerun 重复应用）
-        if cloud_state and cloud_state.get("nonce"):
-            if cloud_state["nonce"] != st.session_state.cloud_nonce:
-                st.session_state.cloud_nonce = cloud_state["nonce"]
-                action = cloud_state.get("action") or ""
-                if action in ("load", "restore"):
-                    rows = cloud_state.get("costs") or []
-                    st.session_state.costs.update(
-                        {r["symbol"]: float(r["cost"]) for r in rows if r.get("symbol")}
-                    )
-                    st.session_state.cloud_rev += 1
-                    st.session_state.cloud_flash = ("ok", f"已从云端载入 {len(rows)} 条成本")
-                    st.rerun()
-                elif action == "save":
-                    st.session_state.cloud_flash = (
-                        "ok",
-                        cloud_state.get("message") or "已保存到云端",
-                    )
-                    st.rerun()
-                elif action == "signout":
-                    st.session_state.cloud_flash = ("muted", "已退出登录，成本回到仅本会话")
-                    st.rerun()
+    with st.expander("备份 / 恢复成本", expanded=False):
+        _export = {k: round(float(v), 3) for k, v in st.session_state.costs.items() if float(v or 0) > 0}
+        st.download_button(
+            "导出成本文件",
+            data=json.dumps(_export, ensure_ascii=False, indent=2, sort_keys=True),
+            file_name=f"costs-{_today_cn():%Y%m%d}.json",
+            mime="application/json",
+            **_full_width(st.download_button),
+        )
+        _up = st.file_uploader("恢复成本文件", type=["json"], key="cost_upload")
+        if _up is not None:
+            # 同一个文件只处理一次，否则 rerun 后会反复导入形成死循环
+            _uid = f"{getattr(_up, 'file_id', '') or ''}|{_up.name}|{_up.size}"
+            if st.session_state.get("_cost_up_done") != _uid:
+                st.session_state["_cost_up_done"] = _uid
+                try:
+                    _data = json.loads(_up.getvalue().decode("utf-8"))
+                    _got = _decode_costs(_encode_costs(_data)) if isinstance(_data, dict) else {}
+                    if _got:
+                        st.session_state.costs.update(_got)
+                        st.session_state.cloud_rev += 1
+                        st.session_state.cloud_flash = ("ok", f"已恢复 {len(_got)} 条成本")
+                    else:
+                        st.session_state.cloud_flash = ("muted", "文件里没有可用的成本数据")
+                except Exception:
+                    st.session_state.cloud_flash = ("muted", "文件读不出来，确认是导出的 json")
+                st.rerun()
 
     st.divider()
     if st.button("立即刷新数据", **_full_width(st.button)):
@@ -1579,6 +1635,17 @@ COST = {str(row["代码"]): float(row["持仓成本"] or 0.0) for _, row in edit
 # ----------------------------------------------------------------------------
 # 5. 抓数据 + 拼表
 # ----------------------------------------------------------------------------
+@st.cache_resource(show_spinner=False)
+def _last_good_store() -> dict:
+    """进程级共享的「上次抓成功的那一份」。
+
+    行情源全挂时拿它兜底：页面不至于空成一片，至少能看到上一份数据，
+    以及它是什么时候抓的。只放内存、不落盘——实例重启就清空。
+    这是有意的：缓存一旦落地就会被当成实时，比空页面更危险。
+    """
+    return {"rows": None, "at": None}
+
+
 if AK_ERROR is not None:
     st.error(
         "**akshare 未安装或导入失败**，无法获取行情。\n\n"
@@ -1594,27 +1661,46 @@ if not st.session_state.watchlist:
     )
     st.stop()
 
+_SPECS = tuple((w["symbol"], w["name"], w["kind"]) for w in st.session_state.watchlist)
+
 with st.spinner("正在抓取行情数据…"):
-    raw_rows = load_all(
-        tuple((w["symbol"], w["name"], w["kind"]) for w in st.session_state.watchlist),
-        _cache_bucket(),
-    )
+    raw_rows = load_all(_SPECS, _cache_bucket())
     st.session_state["_last_load"] = time.time()   # 给自动刷新判断“距上次抓数多久”
 
 df = pd.DataFrame(raw_rows)
 
+# 全挂时候退回上一次成功的结果，并把「这是旧数据」写在最显眼的地方。
+# 必须连标的清单一起比对：缓存是进程级共享的，清单不同就不能拿来充数，
+# 否则你删掉几只之后断网，页面会显示别人的清单。
+STALE_AT = None
 if df["现价"].isna().all():
-    st.error(
-        "**所有标的都抓取失败**，常见原因：\n\n"
-        "1. 本机连不上东方财富 / 新浪的数据接口（网络或防火墙）\n"
-        "2. akshare 版本过旧，接口字段已变 —— 试 `pip install akshare --upgrade`\n\n"
-        "请检查网络后点侧边栏「立即刷新数据」。"
-    )
-    with st.expander("看详细报错"):
-        st.dataframe(
-            df[["代码", "名称", "备注"]], hide_index=True, **_full_width(st.dataframe)
+    _store = _last_good_store()
+    if _store["rows"] and _store.get("sig") == _SPECS:
+        df = pd.DataFrame(_store["rows"])
+        STALE_AT = _store["at"]
+    else:
+        st.error(
+            "**所有标的都抓取失败**，常见原因：\n\n"
+            "1. 本机连不上东方财富 / 新浪的数据接口（网络或防火墙）\n"
+            "2. akshare 版本过旧，接口字段已变 —— 试 `pip install akshare --upgrade`\n\n"
+            "请检查网络后点侧边栏「立即刷新数据」。"
         )
-    st.stop()
+        with st.expander("看详细报错"):
+            st.dataframe(
+                df[["代码", "名称", "备注"]], hide_index=True, **_full_width(st.dataframe)
+            )
+        st.stop()
+else:
+    _store = _last_good_store()
+    _store["rows"] = raw_rows
+    _store["at"] = _now_cn()
+    _store["sig"] = _SPECS
+
+if STALE_AT is not None:
+    st.warning(
+        f"**行情源现在连不上，下面显示的是 {STALE_AT:%m-%d %H:%M} 抓到的数据，不是实时行情。**\n\n"
+        "别拿这些数字做盘中判断。网络恢复后会自动刷新。"
+    )
 
 df["持仓成本"] = df["代码"].map(COST).fillna(0.0)
 
@@ -1647,6 +1733,10 @@ SNIPER_HIT = "🔥 准备狙击"
 SNIPER_IDLE = "观望"
 VOL_RATIO_MIN = 1.5      # 量比门槛：放量才算数
 BIAS_MAX = 2.0           # 距离 MA5 的乖离上限（%），超过就是追高
+# 异动阈值：今天的涨跌幅超过自己日常波动的几倍才算「不正常」。
+# 2.5σ 大约相当于每 80 个交易日出现一次，比固定百分比公平——
+# 银行股涨 3% 是异动，妖股涨 3% 什么都不是。
+Z_ALERT = 2.5
 
 # 乖离率 =（现价 / MA5 − 1）× 100
 df["乖离率(%)"] = np.where(
@@ -1723,6 +1813,9 @@ VIEW_COLS = [
     "均线",          # 多空一句话结论，放最后
 ]
 view = df[VIEW_COLS].copy()
+
+# 卡片还要显示「日波动 / 异动倍数」，但表格里不需要这两列，所以单独拼一份给卡片用
+card_view = view.join(df[["波动率", "异动z"]])
 
 
 # ----------------------------------------------------------------------------
@@ -2005,6 +2098,24 @@ def _card_html(row: pd.Series) -> str:
     cost = _num(row["持仓成本"], 3)
     trend = str(row["均线"])
 
+    # 异动标记：只有明显超出这只票自己的日常振幅时才出现，平时一个都不显示。
+    # 放在底部那行，不挤价格行——否则一出现就会把右侧的图标顶走。
+    z_badge = ""
+    sigma = row.get("波动率", np.nan)
+    z = row.get("异动z", np.nan)
+    try:
+        if pd.notna(z) and abs(float(z)) >= Z_ALERT:
+            _cls = "up" if float(z) > 0 else "down"
+            z_badge = f'<span class="mcard-z {_cls}">异动 ×{abs(float(z)):.1f}</span>'
+    except Exception:
+        z_badge = ""
+    if z_badge:
+        foot_extra = f" · {z_badge}"
+    elif pd.notna(sigma):
+        foot_extra = f" · 日波动 {_num(sigma, 2)}%"
+    else:
+        foot_extra = ""
+
     return (
         f'<div class="mcard{" hit" if hit else ""}">'
         f'<div class="mcard-h">'
@@ -2023,14 +2134,14 @@ def _card_html(row: pd.Series) -> str:
         f'<div class="mg"><span>盈亏</span><b class="{_tone(pnl)}">{pnl_txt}{"%" if pnl_txt != "—" else ""}</b></div>'
         f"</div>"
         f'<div class="mcard-f">MA5 {_num(row["MA5"], 3)} · MA20 {_num(row["MA20"], 3)} · '
-        f'{html.escape(trend)}</div>'
+        f'{html.escape(trend)}{foot_extra}</div>'
         f"</div>"
     )
 
 
 if USE_CARDS:
     st.markdown(
-        '<div class="mcards">' + "".join(_card_html(r) for _, r in view.iterrows()) + "</div>",
+        '<div class="mcards">' + "".join(_card_html(r) for _, r in card_view.iterrows()) + "</div>",
         unsafe_allow_html=True,
     )
 else:
