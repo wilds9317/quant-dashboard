@@ -294,25 +294,56 @@ SN_BORDER = "rgba(255,75,75,.55)" if DARK else "rgba(217,45,32,.40)"
 st.markdown(
     """
 <style>
+  /* ========== 黑曜石基座：所有面板共用同一层材质 ========== */
+  .hero, .kpi, .idx, .mcard {
+      position: relative; overflow: hidden;
+      font-family: -apple-system, "SF Pro Text", "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      background-image:
+          radial-gradient(120% 110% at 8% 0%, rgba(255,255,255,.05) 0%, rgba(255,255,255,0) 52%),
+          linear-gradient(180deg, #171b20 0%, #050609 88%);
+      border: 1px solid rgba(255,255,255,.085);
+      box-shadow:
+          inset 0 1px 0 rgba(255,255,255,.07),
+          0 1px 2px rgba(0,0,0,.45),
+          0 20px 40px -22px rgba(0,0,0,.85);
+  }
+  /* 顶边一道掠光：模拟光擦过金属边缘 */
+  .hero::before, .kpi::before, .idx::before, .mcard::before {
+      content: ""; position: absolute; left: 0; right: 0; top: 0; height: 1px;
+      pointer-events: none;
+      background: linear-gradient(90deg,
+          rgba(255,255,255,0) 0%,
+          rgba(255,255,255,.30) 26%,
+          rgba(255,255,255,.10) 68%,
+          rgba(255,255,255,0) 100%);
+  }
   .block-container { padding-top: 3.6rem; padding-bottom: 2rem; max-width: 1480px; }
   .hero {
       display: flex; justify-content: space-between; align-items: flex-end; gap: 24px;
-      padding: 20px 26px; border: 1px solid rgba(148,163,184,.18); border-radius: 14px;
-      background: rgba(22,27,34,.72); margin-bottom: 16px;
+      padding: 22px 26px; border-radius: 16px; margin-bottom: 18px;
   }
-  .hero-t { font-size: 26px; font-weight: 600; letter-spacing: .5px; color: #e6edf3; }
-  .hero-s { font-size: 13px; color: #8b949e; margin-top: 6px; }
+  .hero-t {
+      font-size: 27px; font-weight: 600; letter-spacing: .02em; color: #f7f9fb;
+      line-height: 1.2;
+  }
+  .hero-s { font-size: 12.5px; color: rgba(236,239,243,.42); margin-top: 8px; letter-spacing: .02em; }
   .hero-r { text-align: right; white-space: nowrap; }
-  .hero-d { font-size: 20px; font-weight: 600; color: #e6edf3; font-variant-numeric: tabular-nums; }
-  .hero-m { font-size: 12px; color: #8b949e; margin-top: 4px; }
-  .kpi-row { display: flex; gap: 12px; margin-bottom: 18px; flex-wrap: wrap; }
-  .kpi {
-      flex: 1 1 0; min-width: 150px; padding: 14px 16px; border-radius: 12px;
-      border: 1px solid rgba(148,163,184,.16); background: rgba(22,27,34,.72);
+  .hero-d {
+      font-size: 21px; font-weight: 600; color: #f7f9fb; letter-spacing: .05em;
+      font-variant-numeric: tabular-nums;
   }
-  .kpi-l { font-size: 12px; color: #8b949e; letter-spacing: .3px; }
-  .kpi-v { font-size: 24px; font-weight: 600; margin-top: 8px; font-variant-numeric: tabular-nums; }
-  .kpi-s { font-size: 11px; color: #6e7681; margin-top: 6px; }
+  .hero-m { font-size: 11.5px; color: rgba(236,239,243,.30); margin-top: 6px; letter-spacing: .05em; }
+  .kpi-row { display: flex; gap: 12px; margin-bottom: 18px; flex-wrap: wrap; }
+  .kpi { flex: 1 1 0; min-width: 150px; padding: 15px 17px; border-radius: 13px; }
+  .kpi-l {
+      font-size: 11.5px; font-weight: 500; color: rgba(236,239,243,.42);
+      letter-spacing: .09em;
+  }
+  .kpi-v {
+      font-size: 25px; font-weight: 600; margin-top: 9px; color: #f7f9fb;
+      font-variant-numeric: tabular-nums; letter-spacing: -.01em;
+  }
+  .kpi-s { font-size: 11px; color: rgba(236,239,243,.26); margin-top: 7px; letter-spacing: .02em; }
   section[data-testid="stSidebar"] { border-right: 1px solid rgba(148,163,184,.14); }
   section[data-testid="stSidebar"] { min-width: 320px; width: 320px; }
   .sniper-hit {
@@ -341,23 +372,30 @@ st.markdown(
   .sniper-item b { color: #fff; font-weight: 700; }
   .sniper-idle {
       display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
-      padding: 11px 18px; margin: 0 0 16px 0; border-radius: 12px;
-      border: 1px solid rgba(148,163,184,.28); background: rgba(148,163,184,.10);
-      font-size: 13px; color: __SN_IDLE_FG__;
+      padding: 12px 18px; margin: 0 0 16px 0; border-radius: 12px;
+      border: 1px solid rgba(255,255,255,.085);
+      background-image: linear-gradient(180deg, #171b20 0%, #0a0c0f 88%);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.06), 0 12px 26px -18px rgba(0,0,0,.8);
+      font-size: 13px; color: rgba(236,239,243,.55);
   }
-  .sniper-idle b { color: __SN_IDLE_KEY__; font-weight: 600; }
+  .sniper-idle b { color: #eef1f5; font-weight: 600; }
   .idx-row { display: flex; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
   .idx {
       flex: 1 1 0; min-width: 190px; display: flex; align-items: baseline; gap: 12px;
-      padding: 12px 18px; border-radius: 12px;
-      border: 1px solid rgba(148,163,184,.16); background: rgba(22,27,34,.72);
+      padding: 14px 18px; border-radius: 13px;
   }
-  .idx-n { font-size: 13px; color: #8b949e; letter-spacing: .3px; white-space: nowrap; }
+  .idx-n {
+      font-size: 12px; color: rgba(236,239,243,.40); letter-spacing: .09em;
+      white-space: nowrap; font-weight: 500;
+  }
   .idx-p {
       font-size: 30px; font-weight: 700; font-variant-numeric: tabular-nums;
-      line-height: 1.1; white-space: nowrap;
+      line-height: 1.1; white-space: nowrap; letter-spacing: -.02em;
   }
-  .idx-c { font-size: 12px; color: #8b949e; font-variant-numeric: tabular-nums; margin-left: auto; white-space: nowrap; }
+  .idx-c {
+      font-size: 11.5px; color: rgba(236,239,243,.32); margin-left: auto;
+      font-variant-numeric: tabular-nums; white-space: nowrap; letter-spacing: .02em;
+  }
   .gate {
       padding: 12px 16px; border-radius: 10px; margin-bottom: 14px;
       font-size: 15px; font-weight: 700; letter-spacing: .5px; color: #fff;
@@ -371,19 +409,22 @@ st.markdown(
       grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr));
   }
   .mcard {
-      border: 1px solid rgba(148,163,184,.18); border-left: 4px solid #8b949e;
-      border-radius: 13px; background: rgba(22,27,34,.72); padding: 11px 13px;
+      border-radius: 14px; padding: 12px 14px;
+      border-left: 4px solid #6b7280;
   }
   .mcard.hit {
-      border-left-color: #d92d20;
-      box-shadow: 0 0 0 1px rgba(217,45,32,.20), 0 0 16px rgba(217,45,32,.16);
+      border-left-color: #f6465d;
+      box-shadow:
+          inset 0 1px 0 rgba(255,255,255,.07),
+          0 0 0 1px rgba(246,70,93,.22),
+          0 14px 34px -16px rgba(246,70,93,.45);
   }
-  .mcard.bull { border-left-color: #ff4b4b; }
-  .mcard.bear { border-left-color: #22c55e; }
+  .mcard.bull { border-left-color: #f6465d; }
+  .mcard.bear { border-left-color: #2ebd85; }
   .mcard-h { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-  .mcard-n { font-size: 16px; font-weight: 700; color: #e6edf3; }
+  .mcard-n { font-size: 16px; font-weight: 650; color: #f7f9fb; letter-spacing: .01em; }
   .mcard-c {
-      font-size: 11px; color: #8b949e; margin-left: 6px;
+      font-size: 11px; color: rgba(236,239,243,.36); margin-left: 6px;
       font-variant-numeric: tabular-nums;
   }
   .mcard-tag {
@@ -391,27 +432,30 @@ st.markdown(
       border-radius: 999px; white-space: nowrap; flex: none;
   }
   .mcard-tag.hit { background: #d92d20; color: #fff; }
-  .mcard-tag.idle { background: rgba(148,163,184,.20); color: #b9c2cc; }
-  .mcard-p { display: flex; align-items: baseline; gap: 10px; margin: 7px 0 9px; }
+  .mcard-tag.idle {
+      background: rgba(255,255,255,.08); color: rgba(236,239,243,.55);
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,.06);
+  }
+  .mcard-p { display: flex; align-items: baseline; gap: 10px; margin: 8px 0 10px; }
   .mcard-px {
-      font-size: 25px; font-weight: 700; color: #e6edf3;
-      font-variant-numeric: tabular-nums; line-height: 1.05;
+      font-size: 25px; font-weight: 700; color: #f7f9fb;
+      font-variant-numeric: tabular-nums; line-height: 1.05; letter-spacing: -.01em;
   }
   .mcard-chg { font-size: 15px; font-weight: 700; font-variant-numeric: tabular-nums; }
   .mcard-g { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px 12px; }
   .mg {
       display: flex; justify-content: space-between; gap: 6px; font-size: 12px;
-      border-top: 1px dashed rgba(148,163,184,.16); padding-top: 5px;
+      border-top: 1px dashed rgba(255,255,255,.075); padding-top: 5px;
   }
-  .mg span { color: #8b949e; white-space: nowrap; }
-  .mg b { font-weight: 600; color: #e6edf3; font-variant-numeric: tabular-nums; }
+  .mg span { color: rgba(236,239,243,.38); white-space: nowrap; }
+  .mg b { font-weight: 600; color: #eef1f5; font-variant-numeric: tabular-nums; }
   .mcard-f {
-      margin-top: 7px; font-size: 11px; color: #6e7681;
-      font-variant-numeric: tabular-nums;
+      margin-top: 8px; font-size: 11px; color: rgba(236,239,243,.26);
+      font-variant-numeric: tabular-nums; letter-spacing: .02em;
   }
-  .t-up { color: #ff4b4b; }
-  .t-down { color: #22c55e; }
-  .t-flat { color: #8b949e; }
+  .t-up { color: #f6465d; }
+  .t-down { color: #2ebd85; }
+  .t-flat { color: rgba(236,239,243,.40); }
 
   /* ---------- 窄屏（手机）适配 ---------- */
   @media (max-width: 760px) {
@@ -457,7 +501,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-UP, DOWN, FLAT = "#ff4b4b", "#22c55e", "#8b949e"  # A股习惯：涨红跌绿
+UP, DOWN, FLAT = "#f6465d", "#2ebd85", "#8b949e"  # A股习惯：涨红跌绿
 
 
 # ----------------------------------------------------------------------------
@@ -1019,9 +1063,9 @@ def _index_card(item: dict) -> str:
     if pd.isna(pct):
         color, pct_txt = FLAT, "—"
     elif INDEX_FORCE_RED:
-        color, pct_txt = "#ff4b4b", f"{pct:+.2f}%"
+        color, pct_txt = UP, f"{pct:+.2f}%"
     else:  # A 股习惯：涨红跌绿，但字号同样醒目
-        color = "#ff4b4b" if pct >= 0 else "#22c55e"
+        color = UP if pct >= 0 else DOWN
         pct_txt = f"{pct:+.2f}%"
     price_txt = f"{price:,.2f}" if pd.notna(price) else "—"
     return (
