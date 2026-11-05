@@ -11,8 +11,11 @@ import datetime as dt
 import hashlib
 import html
 import inspect
+import json
 import re
 import time
+import urllib.parse
+import urllib.request
 
 import numpy as np
 import pandas as pd
@@ -53,8 +56,14 @@ def _market_phase(now: dt.datetime | None = None) -> str:
 # ----------------------------------------------------------------------------
 # 狙击时间窗：只有 14:30:00 ~ 14:50:00 这一段是绿色可开火，其余一律红色禁手。
 # ----------------------------------------------------------------------------
+# 交易时段三态闸门（全部按北京时间）：
+#   09:30–14:30  红色 禁手
+#   14:30–15:00  绿色 狙击
+#   15:00 之后 / 周末 / 09:30 之前  灰色 已收盘（数据定格）
+OPEN_TIME = dt.time(9, 30)
 SNIPE_START = dt.time(14, 30)
-SNIPE_END = dt.time(14, 50)
+SNIPE_END = dt.time(15, 0)
+CLOSE_TIME = dt.time(15, 0)
 
 
 def _fmt_left(sec: int) -> str:
@@ -70,25 +79,52 @@ def _fmt_left(sec: int) -> str:
 
 
 def _snipe_gate(now: dt.datetime | None = None) -> dict:
-    """判断当前是否处在狙击时间窗内，并算出离边界还有多久。
+    """时间闸门的三态判断。
 
-    返回 {"active": bool, "hint": str}
-    active=True  → 绿色，可以开火（14:30 ≤ t < 14:50）
-    active=False → 红色，管住手（其余全部时间，含周末）
+    返回 {"state": "green"|"red"|"idle", "title": str, "hint": str}
+      green  14:30 ≤ t < 15:00   狙击时间，准备开火
+      red    09:30 ≤ t < 14:30   禁手时间，管住手
+      idle   其余（15:00 后 / 周末 / 未开盘）  已收盘，数据已定格
     """
     now = now or _now_cn()
-    start = now.replace(hour=14, minute=30, second=0, microsecond=0)
-    end = now.replace(hour=14, minute=50, second=0, microsecond=0)
-
-    if now.weekday() >= 5:  # 周六日不开市，倒计时没意义
-        return {"active": False, "hint": "周末休市 · 下个交易日再战"}
-
     t = now.time()
+
+    def _at(hh: int, mm: int) -> dt.datetime:
+        return now.replace(hour=hh, minute=mm, second=0, microsecond=0)
+
+    if now.weekday() >= 5:
+        return {
+            "state": "idle",
+            "title": "已收盘，数据已定格",
+            "hint": "周末休市 · 下个交易日再战",
+        }
+
+    if t >= CLOSE_TIME:
+        return {
+            "state": "idle",
+            "title": "已收盘，数据已定格",
+            "hint": "收盘于 15:00 · 明天 09:30 开盘",
+        }
+
     if SNIPE_START <= t < SNIPE_END:
-        return {"active": True, "hint": f"窗口剩余 {_fmt_left((end - now).total_seconds())}"}
-    if t < SNIPE_START:
-        return {"active": False, "hint": f"距开火还有 {_fmt_left((start - now).total_seconds())}"}
-    return {"active": False, "hint": "今日窗口已结束 · 明天 14:30 再来"}
+        return {
+            "state": "green",
+            "title": "✅ 狙击时间，准备开火！",
+            "hint": f"窗口剩余 {_fmt_left((_at(15, 0) - now).total_seconds())}",
+        }
+
+    if t >= OPEN_TIME:
+        return {
+            "state": "red",
+            "title": "❌ 禁手时间，管住手！",
+            "hint": f"距开火还有 {_fmt_left((_at(14, 30) - now).total_seconds())}",
+        }
+
+    return {
+        "state": "idle",
+        "title": "未开盘，数据已定格",
+        "hint": f"距 09:30 开盘还有 {_fmt_left((_at(9, 30) - now).total_seconds())}",
+    }
 
 
 def _cache_ttl() -> int:
@@ -502,6 +538,12 @@ st.markdown(
       box-shadow: 0 0 0 1px rgba(21,128,61,.42), 0 10px 24px -14px rgba(22,163,74,.85);
       animation: gate-pulse 2.4s ease-in-out infinite;
   }
+  /* 已收盘 / 未开盘：灰色，别再喊开火了 */
+  .gate-idle {
+      background: linear-gradient(160deg, #3f4750 0%, #23282e 100%);
+      box-shadow: 0 0 0 1px rgba(255,255,255,.10), 0 10px 24px -16px rgba(0,0,0,.9);
+  }
+  .gate-idle .gate-h { color: rgba(255,255,255,.62); }
   /* 绿色窗口期间呼吸：像在倒数等你扣扳机 */
   @keyframes gate-pulse {
       0%, 100% { box-shadow: 0 0 0 1px rgba(21,128,61,.42), 0 0 0 0 rgba(22,163,74,.42); }
@@ -813,36 +855,198 @@ def _fetch_backup(symbol: str, kind: str) -> tuple[pd.DataFrame, str]:
     return _to_frame(raw, "date", "close", None, "volume"), "新浪·A股日线(前复权)"
 
 
-def _metrics(frame: pd.DataFrame, symbol: str, name: str, source: str) -> dict:
-    close = frame["收盘"]
+def _num_or_nan(v) -> float:
+    """东财对停牌/无数据的标的是给 "-" 或空串，统一转成 NaN。"""
+    try:
+        if v is None or v == "-" or v == "":
+            return np.nan
+        f = float(v)
+        return f if np.isfinite(f) else np.nan
+    except Exception:
+        return np.nan
+
+
+EM_PUSH2 = "https://push2.eastmoney.com/api/qt/ulist.np/get"
+# f2 最新价 / f3 涨跌幅 / f5 成交量 / f10 量比 / f12 代码 / f14 名称
+# f15 最高 / f16 最低 / f17 今开 / f18 昨收 / f124 行情时间戳
+EM_FIELDS = "f2,f3,f5,f10,f12,f13,f14,f15,f16,f17,f18,f124"
+
+
+def _secid(symbol: str) -> str:
+    """600519.SH -> 1.600519；159915.SZ -> 0.159915。"""
+    code, _, mkt = symbol.partition(".")
+    return ("1." if mkt.upper() in ("SH", "SS") else "0.") + code
+
+
+def _rt_push2(symbols: list[str]) -> dict[str, dict]:
+    """东财批量实时报价：一次请求拿全部标的，个股和 ETF 都支持，约 0.2 秒。
+
+    stock_zh_a_spot_em 只覆盖 A 股、不含 ETF，ETF 就走这条同源接口。
+    """
+    if not symbols:
+        return {}
+    qs = urllib.parse.urlencode(
+        {
+            "fltt": 2,
+            "invt": 2,
+            "secids": ",".join(_secid(s) for s in symbols),
+            "fields": EM_FIELDS,
+        }
+    )
+    req = urllib.request.Request(
+        f"{EM_PUSH2}?{qs}", headers={"User-Agent": "Mozilla/5.0"}
+    )
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        payload = json.loads(resp.read().decode("utf-8", "ignore"))
+
+    out: dict[str, dict] = {}
+    for d in (payload.get("data") or {}).get("diff") or []:
+        code6 = str(d.get("f12", "")).zfill(6)
+        out[code6] = {
+            "名称": str(d.get("f14") or ""),
+            "现价": _num_or_nan(d.get("f2")),
+            "涨跌幅": _num_or_nan(d.get("f3")),
+            "今开": _num_or_nan(d.get("f17")),
+            "昨收": _num_or_nan(d.get("f18")),
+            "量比": _num_or_nan(d.get("f10")),
+            "成交量": _num_or_nan(d.get("f5")),
+            "时间": d.get("f124"),
+            "来源": "东财实时·批量报价",
+        }
+    return out
+
+
+def _rt_stock_em() -> dict[str, dict]:
+    """全市场 A 股实时快照（stock_zh_a_spot_em），一次 5000+ 行。
+
+    这是用户指定的接口：价格、涨跌幅、量比都是当天最新值，
+    不是日线里那根可能没走完/串了日期的 K 线。
+    """
+    df = ak.stock_zh_a_spot_em()
+    if df is None or len(df) == 0:
+        return {}
+    df = df.copy()
+    df["代码"] = df["代码"].astype(str).str.zfill(6)
+
+    out: dict[str, dict] = {}
+    for row in df.to_dict("records"):
+        out[row["代码"]] = {
+            "名称": str(row.get("名称") or "").strip(),
+            "现价": _num_or_nan(row.get("最新价")),
+            "涨跌幅": _num_or_nan(row.get("涨跌幅")),
+            "今开": _num_or_nan(row.get("今开")),
+            "昨收": _num_or_nan(row.get("昨收")),
+            "量比": _num_or_nan(row.get("量比")),
+            "成交量": _num_or_nan(row.get("成交量")),
+            "时间": None,
+            "来源": "东财实时·A股全市场",
+        }
+    return out
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _rt_whole_market(_stamp: int = 0) -> dict[str, dict]:
+    """全市场 A 股快照兜底（stock_zh_a_spot_em）。
+
+    这个接口内部要翻 50+ 页，实测 70 秒 —— 不能放在每次刷新里，
+    只在批量报价拿不到数据时兜底，并且 10 分钟内复用同一份。
+    """
+    return _rt_stock_em()
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def _rt_map(
+    symbols: tuple[str, ...], kinds: tuple[str, ...], bucket: int = 0
+) -> dict[str, dict]:
+    """这批标的的实时快照，key 是 6 位代码。
+
+    走两路，都是东财实时行情：
+      1) 批量报价（约 0.2 秒，个股 + ETF 一次拿全）—— 主路径
+      2) stock_zh_a_spot_em（全市场，约 70 秒）—— 只在主路径缺数据时补
+    """
+    del bucket  # 只当缓存键：桶一变（盘中最快 45 秒）就重新取数
+    want = [s.split(".")[0] for s in symbols]
+    out: dict[str, dict] = {}
+
+    # --- 主路径：一次请求拿全部，个股 ETF 都覆盖 ---
+    try:
+        out.update(_rt_push2(list(symbols)))
+    except Exception:
+        pass
+
+    # --- 兜底：主路径没给到的，去全市场快照里找 ---
+    missing = [c for c in want if c not in out]
+    if missing:
+        try:
+            snap = _rt_whole_market()
+        except Exception:
+            snap = {}
+        for c in missing:
+            if c in snap:
+                out[c] = snap[c]
+
+    # 只留下这批标的，别把整个市场塞进缓存
+    return {c: v for c, v in out.items() if c in set(want)}
+
+
+def _metrics(
+    frame: pd.DataFrame,
+    symbol: str,
+    name: str,
+    source: str,
+    quote: dict | None = None,
+) -> dict:
+    """把日线 + 实时快照合成一行。
+
+    铁律：现价 / 涨跌幅 / 量比 一律优先用实时快照；
+    日线只负责算 MA5 / MA20，绝不拿它最后一根 K 线冒充“今天”。
+    """
+    close = frame["收盘"].astype(float).copy()
     vol = frame["成交量"]
+    last_date = frame["日期"].iloc[-1]
 
-    try:
-        vol_ratio = float(vol.iloc[-1] / vol.iloc[-6:-1].mean())
-        if not np.isfinite(vol_ratio):
+    live = quote is not None and np.isfinite(quote.get("现价", np.nan))
+    if live:
+        price = quote["现价"]
+        chg = quote["涨跌幅"]
+        open_px = quote["今开"]
+    else:
+        price = float(close.iloc[-1])
+        chg = float(frame["涨跌幅"].iloc[-1]) if pd.notna(frame["涨跌幅"].iloc[-1]) else np.nan
+        open_px = float(frame["开盘"].iloc[-1]) if pd.notna(frame["开盘"].iloc[-1]) else np.nan
+
+    # 均线要把实时价接上，否则盘中 MA 一直停在上一个收盘价
+    if live:
+        if pd.notna(last_date) and last_date.date() == _today_cn():
+            close.iloc[-1] = price
+        else:
+            close = pd.concat([close, pd.Series([price])], ignore_index=True)
+
+    # 量比优先用行情源给的（东财按分钟折算，比手算的准）
+    vol_ratio = quote.get("量比", np.nan) if live else np.nan
+    if not np.isfinite(vol_ratio):
+        try:
+            vol_ratio = float(vol.iloc[-1] / vol.iloc[-6:-1].mean())
+            if not np.isfinite(vol_ratio):
+                vol_ratio = np.nan
+        except Exception:
             vol_ratio = np.nan
-    except Exception:
-        vol_ratio = np.nan
 
-    try:
-        open_px = float(frame["开盘"].iloc[-1])
-        if not np.isfinite(open_px):
-            open_px = np.nan
-    except Exception:
-        open_px = np.nan
+    real_name = (quote.get("名称") or "").strip() if live else ""
+    note = "" if live else "实时快照缺失，用日线兜底"
 
     return {
         "代码": symbol,
-        "名称": name,
-        "现价": float(close.iloc[-1]),
+        "名称": name or real_name,
+        "现价": price,
         "开盘": open_px,
-        "涨跌幅(%)": float(frame["涨跌幅"].iloc[-1]) if pd.notna(frame["涨跌幅"].iloc[-1]) else np.nan,
+        "涨跌幅(%)": chg,
         "量比": vol_ratio,
         "MA5": float(close.rolling(5).mean().iloc[-1]) if len(close) >= 5 else np.nan,
         "MA20": float(close.rolling(20).mean().iloc[-1]) if len(close) >= 20 else np.nan,
-        "数据日期": frame["日期"].iloc[-1],
-        "数据源": source,
-        "备注": "",
+        "数据日期": last_date if not live else pd.Timestamp(_today_cn()),
+        "数据源": quote["来源"] if live else source,
+        "备注": note,
     }
 
 
@@ -861,18 +1065,32 @@ def _absurd_change(pct, limit: float = 21.0) -> bool:
 
 @st.cache_data(ttl=900, show_spinner=False)
 def load_all(specs: tuple[tuple[str, str, str], ...], bucket: int = 0) -> list[dict]:
-    """逐个标的抓取，单只失败不影响整体。
+    """抓一批标的：实时快照负责价格/涨跌幅/量比，日线只负责算均线。
 
-    specs 是 ((代码, 名称, 类型), ...) —— 用元组做缓存键，
-    列表一变缓存自动失效，不用手动 clear。
-    bucket 是时间桶（盘中 45 秒一换），让缓存能按交易/非交易时段变频率。
+    specs 是 ((代码, 名称, 类型), ...)，元组做缓存键，列表一变缓存自动失效。
+    bucket 是时间桶（盘中 45 秒一换），让缓存频率跟着交易时段走。
     """
-    del bucket  # 仅作缓存键
     results: list[dict] = []
 
+    # --- 第一步：整批标的的实时快照，一次网络请求拿全 ---
+    rt: dict[str, dict] = {}
+    try:
+        rt = _rt_map(
+            tuple(x[0] for x in specs),
+            tuple(x[2] for x in specs),
+            bucket,
+        )
+    except Exception:
+        rt = {}
+
     for symbol, name, kind in specs:
+        quote = rt.get(symbol.split(".")[0])
+        # 实时涨跌幅物理上不可能超过 21%，超了说明快照串行，宁可用日线
+        if quote is not None and _absurd_change(quote.get("涨跌幅")):
+            quote = None
+
         other = "stock" if kind == "etf" else "etf"
-        # 先按猜的类型试主源/备援，再换另一类重试 —— 猜错代码类型也能救回来
+        # 日线只用来算均线：主源 → 备援 → 猜错类型再救一次
         chain = (
             (_fetch_raw, kind, "主"),
             (_fetch_backup, kind, "备"),
@@ -880,68 +1098,52 @@ def load_all(specs: tuple[tuple[str, str, str], ...], bucket: int = 0) -> list[d
             (_fetch_backup, other, "备·另一类"),
         )
         errors: list[str] = []
+        row: dict | None = None
 
         for fetcher, k, tag in chain:
             try:
                 frame, source = fetcher(symbol, k)
-                row = _metrics(frame, symbol, name, source)
-                # 先做数值体检：ETF/个股单日不可能涨跌 20% 以上，超了就是数据源串了行
-                if _absurd_change(row["涨跌幅(%)"]):
-                    errors.append(f"{tag}:涨跌幅异常({row['涨跌幅(%)']:+.2f}%)")
+                cand = _metrics(frame, symbol, name, source, quote)
+                if _absurd_change(cand["涨跌幅(%)"]):
+                    errors.append(f"{tag}:涨跌幅异常({cand['涨跌幅(%)']:+.2f}%)")
                     continue
-                results.append(row)
+                row = cand
                 break
             except Exception as exc:  # 网络 / 接口变更 / 停牌 / 代码不存在 都走这里
                 errors.append(f"{tag}:{type(exc).__name__}")
-        else:
-            results.append(
-                {
-                    "代码": symbol,
-                    "名称": name,
-                    "现价": np.nan,
-                    "开盘": np.nan,
-                    "涨跌幅(%)": np.nan,
-                    "量比": np.nan,
-                    "MA5": np.nan,
-                    "MA20": np.nan,
-                    "数据日期": pd.NaT,
-                    "数据源": "—",
-                    "备注": " / ".join(errors),
-                }
-            )
 
-    # --- 第二遍：谁的数据日期落后于“全市场最新”，就换源再要一次 ---
-    # 备援源（新浪）有时最后一根 K 线停在几天前，直接显示会把“三天前的涨幅”
-    # 当成今天的，这就是之前科创50 显示 +10% 的来源。
-    dates = [r["数据日期"] for r in results if pd.notna(r["数据日期"])]
-    if dates:
-        newest = max(dates)
-        for idx, row in enumerate(results):
-            if pd.isna(row["数据日期"]) or row["数据日期"] >= newest:
-                continue
-            kind = next((k for s, _n, k in specs if s == row["代码"]), "etf")
-            other = "stock" if kind == "etf" else "etf"
-            best = row
-            for fetcher, k, _tag in (
-                (_fetch_raw, kind, "主"),
-                (_fetch_backup, kind, "备"),
-                (_fetch_raw, other, "主·另一类"),
-            ):
-                try:
-                    frame, source = fetcher(row["代码"], k)
-                    cand = _metrics(frame, row["代码"], row["名称"], source)
-                except Exception:
-                    continue
-                if _absurd_change(cand["涨跌幅(%)"]):
-                    continue
-                if pd.notna(cand["数据日期"]) and cand["数据日期"] > best["数据日期"]:
-                    best = cand
-                if pd.notna(best["数据日期"]) and best["数据日期"] >= newest:
-                    break
-            if best is not row:
-                results[idx] = best
-            else:
-                results[idx]["备注"] = (row["备注"] or "") + f"数据停留在 {row['数据日期']:%m-%d}"
+        # 日线全挂但实时快照还在：价格照样能显示，只是均线算不出来
+        if row is None and quote is not None and np.isfinite(quote.get("现价", np.nan)):
+            row = {
+                "代码": symbol,
+                "名称": name,
+                "现价": quote["现价"],
+                "开盘": quote["今开"],
+                "涨跌幅(%)": quote["涨跌幅"],
+                "量比": quote["量比"],
+                "MA5": np.nan,
+                "MA20": np.nan,
+                "数据日期": pd.Timestamp(_today_cn()),
+                "数据源": quote["来源"],
+                "备注": "日线缺失，均线不可用",
+            }
+
+        if row is None:
+            row = {
+                "代码": symbol,
+                "名称": name,
+                "现价": np.nan,
+                "开盘": np.nan,
+                "涨跌幅(%)": np.nan,
+                "量比": np.nan,
+                "MA5": np.nan,
+                "MA20": np.nan,
+                "数据日期": pd.NaT,
+                "数据源": "—",
+                "备注": " / ".join(errors),
+            }
+
+        results.append(row)
 
     return results
 
@@ -1028,11 +1230,10 @@ with st.sidebar:
     # 一律按北京时间算，云上服务器是 UTC 也不会错 8 小时
     _now = _now_cn()
     _gate = _snipe_gate(_now)
+    _gate_cls = {"green": "gate-on", "red": "gate-off", "idle": "gate-idle"}[_gate["state"]]
     st.markdown(
-        f'<div class="gate {"gate-on" if _gate["active"] else "gate-off"}">'
-        f'<div class="gate-t">'
-        f'{"✅ 狙击时间，准备开火！" if _gate["active"] else "❌ 禁手时间，管住手！"}'
-        f"</div>"
+        f'<div class="gate {_gate_cls}">'
+        f'<div class="gate-t">{_gate["title"]}</div>'
         f'<div class="gate-h">{_gate["hint"]}</div>'
         f"</div>",
         unsafe_allow_html=True,
@@ -1040,7 +1241,7 @@ with st.sidebar:
     _phase_short = {"open": "盘中", "break": "午休", "closed": "已收盘"}
     st.caption(
         f"现在 {_now:%H:%M:%S}（北京时间）\n\n"
-        f"狙击窗口 14:30–14:50 · {_phase_short[_market_phase(_now)]}"
+        f"狙击窗口 14:30–15:00 · {_phase_short[_market_phase(_now)]}"
     )
     st.checkbox(
         "盘中自动刷新",
