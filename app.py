@@ -415,6 +415,14 @@ SN_IDLE_FG = "#9ba7b4" if DARK else "#57606a"
 SN_IDLE_KEY = "#e6edf3" if DARK else "#1f2328"
 SN_BORDER = "rgba(255,75,75,.55)" if DARK else "rgba(217,45,32,.40)"
 
+# 页头是纯文字（不套面板底色），颜色必须跟着主题走：
+# 深色主题用浅字，浅色主题用深墨绿字，否则浅色背景下白字直接看不见
+HERO_T = "#f2f5f8" if DARK else "#12211a"
+HERO_S = "rgba(236,239,243,.38)" if DARK else "rgba(18,33,26,.55)"
+HERO_D = "rgba(236,239,243,.55)" if DARK else "rgba(18,33,26,.62)"
+HERO_M = "rgba(236,239,243,.24)" if DARK else "rgba(18,33,26,.36)"
+HERO_LINE = "rgba(255,255,255,.07)" if DARK else "rgba(18,33,26,.12)"
+
 st.markdown(
     """
 <style>
@@ -442,21 +450,31 @@ st.markdown(
           rgba(255,255,255,0) 100%);
   }
   .block-container { padding-top: 3.6rem; padding-bottom: 2rem; max-width: 1480px; }
+  /* ---------- 极简页头：不套面板，只留文字 + 一条细线 ---------- */
   .hero {
       display: flex; justify-content: space-between; align-items: flex-end; gap: 24px;
-      padding: 22px 26px; border-radius: 16px; margin-bottom: 18px;
+      padding: 2px 2px 20px; margin-bottom: 20px;
+      border: 0; border-radius: 0; background: none; background-image: none;
+      box-shadow: none;
+      border-bottom: 1px solid __HERO_LINE__;
   }
+  .hero::before { display: none; }          /* 去掉顶边掠光线 */
   .hero-t {
-      font-size: 27px; font-weight: 600; letter-spacing: .02em; color: #f7f9fb;
-      line-height: 1.2;
+      display: flex; align-items: center; gap: 10px;
+      font-size: 22px; font-weight: 500; letter-spacing: .10em; color: __HERO_T__;
+      line-height: 1.25;
   }
-  .hero-s { font-size: 12.5px; color: rgba(236,239,243,.42); margin-top: 8px; letter-spacing: .02em; }
+  .hero-t i { font-style: normal; font-size: 18px; opacity: .8; }
+  .hero-s {
+      font-size: 12.5px; color: __HERO_S__;
+      margin-top: 11px; letter-spacing: .07em; line-height: 1.7;
+  }
   .hero-r { text-align: right; white-space: nowrap; }
   .hero-d {
-      font-size: 21px; font-weight: 600; color: #f7f9fb; letter-spacing: .05em;
-      font-variant-numeric: tabular-nums;
+      font-size: 13px; font-weight: 400; color: __HERO_D__;
+      letter-spacing: .10em; font-variant-numeric: tabular-nums;
   }
-  .hero-m { font-size: 11.5px; color: rgba(236,239,243,.30); margin-top: 6px; letter-spacing: .05em; }
+  .hero-m { font-size: 11.5px; color: __HERO_M__; margin-top: 7px; letter-spacing: .06em; }
   .kpi-row { display: flex; gap: 12px; margin-bottom: 18px; flex-wrap: wrap; }
   .kpi { flex: 1 1 0; min-width: 150px; padding: 15px 17px; border-radius: 13px; }
   .kpi-l {
@@ -519,6 +537,20 @@ st.markdown(
   .idx-c {
       font-size: 11.5px; color: rgba(236,239,243,.32); margin-left: auto;
       font-variant-numeric: tabular-nums; white-space: nowrap; letter-spacing: .02em;
+  }
+  /* ---------- 侧边栏极简页头 ---------- */
+  .sb-head {
+      padding: 0 0 13px; margin-bottom: 14px;
+      border-bottom: 1px solid __HERO_LINE__;
+  }
+  .sb-t {
+      display: flex; align-items: center; gap: 7px;
+      font-size: 14.5px; font-weight: 500; letter-spacing: .09em; color: __HERO_T__;
+  }
+  .sb-t i { font-style: normal; font-size: 13px; opacity: .8; }
+  .sb-s {
+      font-size: 11px; color: __HERO_S__;
+      margin-top: 8px; letter-spacing: .05em; line-height: 1.65;
   }
   .gate {
       padding: 11px 14px 10px; border-radius: 12px; margin-bottom: 12px;
@@ -722,11 +754,12 @@ st.markdown(
   /* ---------- 窄屏（手机）适配 ---------- */
   @media (max-width: 760px) {
       .block-container { padding: 3.5rem 0.8rem 1.8rem !important; }
-      .hero { flex-direction: column; align-items: flex-start; gap: 8px; padding: 13px 15px; }
-      .hero-t { font-size: 19px; }
-      .hero-s { font-size: 11.5px; line-height: 1.45; }
-      .hero-r { text-align: left; }
-      .hero-d { font-size: 15px; }
+      .hero { flex-direction: column; align-items: flex-start; gap: 6px; padding: 2px 2px 16px; }
+      .hero-t { font-size: 19px; letter-spacing: .09em; }
+      .hero-s { font-size: 11.5px; line-height: 1.6; letter-spacing: .05em; }
+      .hero-r { text-align: left; display: flex; align-items: baseline; gap: 8px; margin-top: 2px; }
+      .hero-d { display: none; }   /* 手机端只留「数据日期」一行，避免同一个日期出现两次 */
+      .hero-m { font-size: 10.5px; margin-top: 0; }
       /* 三个指数挤在一行，不变成三条大块 */
       .idx-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
       .idx {
@@ -761,7 +794,12 @@ st.markdown(
 """.replace("__SN_BORDER__", SN_BORDER)
     .replace("__SN_TITLE__", SN_TITLE)
     .replace("__SN_IDLE_FG__", SN_IDLE_FG)
-    .replace("__SN_IDLE_KEY__", SN_IDLE_KEY),
+    .replace("__SN_IDLE_KEY__", SN_IDLE_KEY)
+    .replace("__HERO_T__", HERO_T)
+    .replace("__HERO_S__", HERO_S)
+    .replace("__HERO_D__", HERO_D)
+    .replace("__HERO_M__", HERO_M)
+    .replace("__HERO_LINE__", HERO_LINE),
     unsafe_allow_html=True,
 )
 
@@ -1226,6 +1264,15 @@ DISPLAY = st.session_state.get("view_mode", "card")
 USE_CARDS = DISPLAY == "card" or (DISPLAY == "auto" and IS_MOBILE)
 
 with st.sidebar:
+    # --- 极简页头：与主页面同一套文字 ---
+    st.markdown(
+        '<div class="sb-head">'
+        '<div class="sb-t"><i>📖</i>学徒成长目录</div>'
+        '<div class="sb-s">敬畏市场，极致纪律，记录每一次蛰伏与出击。</div>'
+        "</div>",
+        unsafe_allow_html=True,
+    )
+
     # --- 时间闸门：只有 14:30–14:50 是绿色开火窗，其余时间一律红色禁手 ---
     # 一律按北京时间算，云上服务器是 UTC 也不会错 8 小时
     _now = _now_cn()
@@ -1572,8 +1619,8 @@ st.markdown(
     f"""
 <div class="hero">
   <div>
-    <div class="hero-t">学徒成长目录</div>
-    <div class="hero-s">A股 · ETF 双市场 · {len(view)} 个标的（可自定义） · 均线结构 + 量价狙击 + 持仓盈亏监控</div>
+    <div class="hero-t"><i>📖</i>学徒成长目录</div>
+    <div class="hero-s">敬畏市场，极致纪律，记录每一次蛰伏与出击。</div>
   </div>
   <div class="hero-r">
     <div class="hero-d">{today.strftime('%Y-%m-%d')}</div>
