@@ -148,11 +148,11 @@ SORT_MODES = {
     "pnl": "盈亏比例 ↓",
 }
 
-# 展示形式：手机用卡片，电脑用表格，也可以手动锁定
+# 展示形式：默认全部用叶子卡片；表格只作为可选项保留
 VIEW_MODES = {
+    "card": "🍃 叶子卡片（默认）",
     "auto": "自动（按设备判断）",
-    "card": "卡片（手机推荐）",
-    "table": "表格（电脑推荐）",
+    "table": "表格（冷冰冰的数字）",
 }
 
 
@@ -261,7 +261,7 @@ def _sync_url() -> None:
         elif st.query_params.get("sort") != mode:
             st.query_params["sort"] = mode
 
-        vmode = st.session_state.get("view_mode", "auto")
+        vmode = st.session_state.get("view_mode", "card")
         if vmode == "auto":
             if "view" in st.query_params:
                 del st.query_params["view"]
@@ -283,8 +283,8 @@ def _init_state() -> None:
         st.session_state.sort_mode = wanted if wanted in SORT_MODES else "signal"
 
     if "view_mode" not in st.session_state:
-        wanted_v = st.query_params.get("view", "auto")
-        st.session_state.view_mode = wanted_v if wanted_v in VIEW_MODES else "auto"
+        wanted_v = st.query_params.get("view", "card")
+        st.session_state.view_mode = wanted_v if wanted_v in VIEW_MODES else "card"
 
     st.session_state.setdefault("costs", {})
     st.session_state.setdefault("wl_msg", None)
@@ -341,21 +341,21 @@ SN_BORDER = "rgba(255,75,75,.55)" if DARK else "rgba(217,45,32,.40)"
 st.markdown(
     """
 <style>
-  /* ========== 黑曜石基座：所有面板共用同一层材质 ========== */
-  .hero, .kpi, .idx, .mcard {
+  /* ========== 深林基座：标题/指数/KPI 共用一层材质 ========== */
+  .hero, .kpi, .idx {
       position: relative; overflow: hidden;
       font-family: -apple-system, "SF Pro Text", "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
       background-image:
-          radial-gradient(120% 110% at 8% 0%, rgba(255,255,255,.05) 0%, rgba(255,255,255,0) 52%),
-          linear-gradient(180deg, #171b20 0%, #050609 88%);
-      border: 1px solid rgba(255,255,255,.085);
+          radial-gradient(120% 110% at 8% 0%, rgba(180,255,205,.09) 0%, rgba(255,255,255,0) 54%),
+          linear-gradient(180deg, #16281c 0%, #050a06 88%);
+      border: 1px solid rgba(255,255,255,.10);
       box-shadow:
-          inset 0 1px 0 rgba(255,255,255,.07),
+          inset 0 1px 0 rgba(255,255,255,.08),
           0 1px 2px rgba(0,0,0,.45),
           0 20px 40px -22px rgba(0,0,0,.85);
   }
-  /* 顶边一道掠光：模拟光擦过金属边缘 */
-  .hero::before, .kpi::before, .idx::before, .mcard::before {
+  /* 顶边一道掠光：模拟光擦过叶面 */
+  .hero::before, .kpi::before, .idx::before {
       content: ""; position: absolute; left: 0; right: 0; top: 0; height: 1px;
       pointer-events: none;
       background: linear-gradient(90deg,
@@ -450,59 +450,174 @@ st.markdown(
   .gate-off { background: #d92d20; box-shadow: 0 0 0 1px rgba(217,45,32,.35); }
   .gate-on  { background: #15803d; box-shadow: 0 0 0 1px rgba(21,128,61,.35); }
 
-  /* ---------- 移动端卡片 ---------- */
+  /* ================= 叶子卡片（大自然主题） ================= */
   .mcards {
-      display: grid; gap: 10px; margin-bottom: 10px;
-      grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr));
+      display: grid; gap: 14px; margin-bottom: 12px;
+      grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr));
   }
   .mcard {
-      border-radius: 14px; padding: 12px 14px;
-      border-left: 4px solid #6b7280;
-  }
-  .mcard.hit {
-      border-left-color: #f6465d;
+      position: relative; overflow: hidden;
+      padding: 14px 16px 13px;
+      /* 左下角收成叶尖：24px 圆角 + 6px 尖角 */
+      border-radius: 24px 24px 24px 6px;
+      color: #16351f;
+      font-family: -apple-system, "SF Pro Text", "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      background-image:
+          radial-gradient(120% 95% at 100% 0%, rgba(255,255,255,.9) 0%, rgba(255,255,255,0) 58%),
+          linear-gradient(160deg, #f0fbe9 0%, #dcf2d2 52%, #c6e6ba 100%);
+      border: 1px solid rgba(31,77,46,.16);
       box-shadow:
-          inset 0 1px 0 rgba(255,255,255,.07),
-          0 0 0 1px rgba(246,70,93,.22),
-          0 14px 34px -16px rgba(246,70,93,.45);
+          inset 0 1px 0 rgba(255,255,255,.95),
+          0 10px 26px -14px rgba(21,54,32,.45);
+      animation: leaf-in .4s cubic-bezier(.2,.8,.3,1) both;
   }
-  .mcard.bull { border-left-color: #f6465d; }
-  .mcard.bear { border-left-color: #2ebd85; }
-  .mcard-h { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-  .mcard-n { font-size: 16px; font-weight: 650; color: #f7f9fb; letter-spacing: .01em; }
+  /* 叶脉：一道斜向细线，从叶尖通向右上 */
+  .mcard::before {
+      content: ""; position: absolute; inset: 0; pointer-events: none;
+      background: linear-gradient(118deg,
+          transparent 44%,
+          rgba(31,77,46,.075) 45%,
+          rgba(31,77,46,.075) 45.6%,
+          transparent 46.6%);
+  }
+  /* 右上角淡出的叶片水印（放右下，别压住标签） */
+  .mcard::after {
+      content: "🍃"; position: absolute; bottom: -14px; right: -10px;
+      font-size: 52px; opacity: .10; transform: rotate(-14deg);
+      pointer-events: none;
+  }
+  @keyframes leaf-in {
+      from { opacity: 0; transform: translateY(8px) scale(.985); }
+      to   { opacity: 1; transform: none; }
+  }
+
+  /* 狙击命中：红边呼吸 + 红光外溢 */
+  .mcard.hit {
+      border: 1.5px solid rgba(225,29,72,.85);
+      animation: leaf-in .4s cubic-bezier(.2,.8,.3,1) both,
+                 leaf-alert 1.4s ease-in-out .4s infinite;
+  }
+  @keyframes leaf-alert {
+      0%, 100% {
+          box-shadow: inset 0 1px 0 rgba(255,255,255,.95),
+                      0 0 0 1px rgba(225,29,72,.30),
+                      0 0 16px rgba(225,29,72,.30),
+                      0 10px 26px -14px rgba(21,54,32,.45);
+      }
+      50% {
+          box-shadow: inset 0 1px 0 rgba(255,255,255,.95),
+                      0 0 0 3px rgba(225,29,72,.55),
+                      0 0 34px rgba(225,29,72,.60),
+                      0 10px 26px -14px rgba(21,54,32,.45);
+      }
+  }
+
+  .mcard-h {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 8px; position: relative; z-index: 1;
+  }
+  .mcard-n { font-size: 16px; font-weight: 750; color: #12331c; letter-spacing: .01em; }
   .mcard-c {
-      font-size: 11px; color: rgba(236,239,243,.36); margin-left: 6px;
+      font-size: 11px; color: #4e7c5e; margin-left: 6px;
       font-variant-numeric: tabular-nums;
   }
   .mcard-tag {
-      font-size: 11px; font-weight: 700; padding: 3px 8px;
+      font-size: 11px; font-weight: 700; padding: 3px 9px;
       border-radius: 999px; white-space: nowrap; flex: none;
   }
-  .mcard-tag.hit { background: #d92d20; color: #fff; }
-  .mcard-tag.idle {
-      background: rgba(255,255,255,.08); color: rgba(236,239,243,.55);
-      box-shadow: inset 0 0 0 1px rgba(255,255,255,.06);
+  .mcard-tag.hit {
+      background: #e11d48; color: #fff;
+      box-shadow: 0 0 10px rgba(225,29,72,.55);
   }
-  .mcard-p { display: flex; align-items: baseline; gap: 10px; margin: 8px 0 10px; }
+  .mcard-tag.idle {
+      background: rgba(31,77,46,.10); color: #3d6b4d;
+      box-shadow: inset 0 0 0 1px rgba(31,77,46,.08);
+  }
+
+  /* ---------- 卡片里的精灵 ---------- */
+  .pet {
+      font-size: 27px; line-height: 1; display: block;
+      font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
+  }
+  .pet-deer   { animation: deer-hop 1.5s ease-in-out infinite; }
+  .pet-turtle { animation: turtle-walk 3.4s ease-in-out infinite; }
+  .pet-cheetah {
+      animation: cheetah-prowl 1.15s ease-in-out infinite;
+      filter: drop-shadow(0 0 7px rgba(225,29,72,.9)) drop-shadow(0 0 15px rgba(225,29,72,.55));
+  }
+  .pet-flat { opacity: .6; filter: grayscale(.3); }
+  /* 精灵站的小圆台：多头绿底、空头红底、狙击红光大底 */
+  .pet-chip {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 42px; height: 42px; border-radius: 50%; flex: none;
+      background: rgba(21,128,61,.13);
+      box-shadow: inset 0 0 0 1px rgba(21,128,61,.22);
+  }
+  .pet-chip.bear {
+      background: rgba(217,45,32,.12);
+      box-shadow: inset 0 0 0 1px rgba(217,45,32,.24);
+  }
+  .pet-chip.hit {
+      background: rgba(225,29,72,.16);
+      box-shadow: inset 0 0 0 1px rgba(225,29,72,.42),
+                  0 0 18px rgba(225,29,72,.45);
+  }
+  .pet-chip.flat {
+      background: rgba(31,77,46,.07);
+      box-shadow: inset 0 0 0 1px rgba(31,77,46,.12);
+  }
+
+  @keyframes deer-hop {
+      0%, 100% { transform: translateY(0) rotate(-3deg); }
+      38%      { transform: translateY(-7px) rotate(3deg); }
+      62%      { transform: translateY(-4px) rotate(1deg); }
+  }
+  @keyframes turtle-walk {
+      0%, 100% { transform: translateX(-2px) rotate(-4deg); }
+      50%      { transform: translateX(2px) rotate(4deg); }
+  }
+  @keyframes cheetah-prowl {
+      0%, 100% {
+          transform: translateY(0) scale(1);
+          filter: drop-shadow(0 0 6px rgba(225,29,72,.85));
+      }
+      50% {
+          transform: translateY(-3px) scale(1.10);
+          filter: drop-shadow(0 0 18px rgba(225,29,72,1));
+      }
+  }
+
+  .mcard-p {
+      display: flex; align-items: center; gap: 10px;
+      margin: 9px 0 10px; position: relative; z-index: 1;
+  }
   .mcard-px {
-      font-size: 25px; font-weight: 700; color: #f7f9fb;
+      font-size: 26px; font-weight: 800; color: #0f2e19;
       font-variant-numeric: tabular-nums; line-height: 1.05; letter-spacing: -.01em;
   }
-  .mcard-chg { font-size: 15px; font-weight: 700; font-variant-numeric: tabular-nums; }
-  .mcard-g { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px 12px; }
+  .mcard-chg { font-size: 15px; font-weight: 800; font-variant-numeric: tabular-nums; }
+  .mcard-g {
+      display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 6px 14px; position: relative; z-index: 1;
+  }
   .mg {
       display: flex; justify-content: space-between; gap: 6px; font-size: 12px;
-      border-top: 1px dashed rgba(255,255,255,.075); padding-top: 5px;
+      border-top: 1px dashed rgba(31,77,46,.20); padding-top: 5px;
   }
-  .mg span { color: rgba(236,239,243,.38); white-space: nowrap; }
-  .mg b { font-weight: 600; color: #eef1f5; font-variant-numeric: tabular-nums; }
+  .mg span { color: #4f7a5f; white-space: nowrap; }
+  .mg b { font-weight: 700; color: #14361f; font-variant-numeric: tabular-nums; }
+  /* 提权：否则 .mg b 会把涨跌红绿盖掉（之前乖离/盈亏一直显示成深绿就是这个原因） */
+  .mg b.t-up { color: #d92d20; }
+  .mg b.t-down { color: #0b7a3d; }
+  .mg b.t-flat { color: #4e7c5e; }
   .mcard-f {
-      margin-top: 8px; font-size: 11px; color: rgba(236,239,243,.26);
+      margin-top: 8px; font-size: 11px; color: #5d8a6b;
       font-variant-numeric: tabular-nums; letter-spacing: .02em;
+      position: relative; z-index: 1;
   }
-  .t-up { color: #f6465d; }
-  .t-down { color: #2ebd85; }
-  .t-flat { color: rgba(236,239,243,.40); }
+  .t-up { color: #d92d20; }
+  .t-down { color: #0b7a3d; }
+  .t-flat { color: #4e7c5e; }
 
   /* ---------- 窄屏（手机）适配 ---------- */
   @media (max-width: 760px) {
@@ -671,6 +786,19 @@ def _metrics(frame: pd.DataFrame, symbol: str, name: str, source: str) -> dict:
     }
 
 
+def _absurd_change(pct, limit: float = 21.0) -> bool:
+    """涨跌幅大到物理上不可能，说明数据源串行/复权口径错了，直接判为不可用。
+
+    A 股单日上限：主板 10%、创业板/科创板 20%、ST 5%；留 1% 余量。
+    """
+    try:
+        if pct is None or pd.isna(pct):
+            return False
+        return abs(float(pct)) > limit
+    except Exception:
+        return False
+
+
 @st.cache_data(ttl=900, show_spinner=False)
 def load_all(specs: tuple[tuple[str, str, str], ...], bucket: int = 0) -> list[dict]:
     """逐个标的抓取，单只失败不影响整体。
@@ -696,7 +824,12 @@ def load_all(specs: tuple[tuple[str, str, str], ...], bucket: int = 0) -> list[d
         for fetcher, k, tag in chain:
             try:
                 frame, source = fetcher(symbol, k)
-                results.append(_metrics(frame, symbol, name, source))
+                row = _metrics(frame, symbol, name, source)
+                # 先做数值体检：ETF/个股单日不可能涨跌 20% 以上，超了就是数据源串了行
+                if _absurd_change(row["涨跌幅(%)"]):
+                    errors.append(f"{tag}:涨跌幅异常({row['涨跌幅(%)']:+.2f}%)")
+                    continue
+                results.append(row)
                 break
             except Exception as exc:  # 网络 / 接口变更 / 停牌 / 代码不存在 都走这里
                 errors.append(f"{tag}:{type(exc).__name__}")
@@ -716,6 +849,39 @@ def load_all(specs: tuple[tuple[str, str, str], ...], bucket: int = 0) -> list[d
                     "备注": " / ".join(errors),
                 }
             )
+
+    # --- 第二遍：谁的数据日期落后于“全市场最新”，就换源再要一次 ---
+    # 备援源（新浪）有时最后一根 K 线停在几天前，直接显示会把“三天前的涨幅”
+    # 当成今天的，这就是之前科创50 显示 +10% 的来源。
+    dates = [r["数据日期"] for r in results if pd.notna(r["数据日期"])]
+    if dates:
+        newest = max(dates)
+        for idx, row in enumerate(results):
+            if pd.isna(row["数据日期"]) or row["数据日期"] >= newest:
+                continue
+            kind = next((k for s, _n, k in specs if s == row["代码"]), "etf")
+            other = "stock" if kind == "etf" else "etf"
+            best = row
+            for fetcher, k, _tag in (
+                (_fetch_raw, kind, "主"),
+                (_fetch_backup, kind, "备"),
+                (_fetch_raw, other, "主·另一类"),
+            ):
+                try:
+                    frame, source = fetcher(row["代码"], k)
+                    cand = _metrics(frame, row["代码"], row["名称"], source)
+                except Exception:
+                    continue
+                if _absurd_change(cand["涨跌幅(%)"]):
+                    continue
+                if pd.notna(cand["数据日期"]) and cand["数据日期"] > best["数据日期"]:
+                    best = cand
+                if pd.notna(best["数据日期"]) and best["数据日期"] >= newest:
+                    break
+            if best is not row:
+                results[idx] = best
+            else:
+                results[idx]["备注"] = (row["备注"] or "") + f"数据停留在 {row['数据日期']:%m-%d}"
 
     return results
 
@@ -794,7 +960,7 @@ def load_indices(bucket: int = 0) -> tuple[list[dict], str]:
 _init_state()
 
 # 展示形式：auto = 按设备判断（手机卡片 / 电脑表格），也可手动锁定
-DISPLAY = st.session_state.get("view_mode", "auto")
+DISPLAY = st.session_state.get("view_mode", "card")
 USE_CARDS = DISPLAY == "card" or (DISPLAY == "auto" and IS_MOBILE)
 
 with st.sidebar:
@@ -833,8 +999,9 @@ with st.sidebar:
         label_visibility="collapsed",
     )
     st.caption(
-        f"当前判断为{'手机' if IS_MOBILE else '电脑'}端，"
-        f"正在用{'卡片' if USE_CARDS else '表格'}展示。窄屏下表格要左右滑，选「卡片」更顺手。"
+        f"当前{'手机' if IS_MOBILE else '电脑'}端，正在用"
+        f"{'叶子卡片 🍃' if USE_CARDS else '表格'}展示。"
+        "卡片里的小鹿会跳、猎豹会发光，表格只有数字。"
     )
 
     st.divider()
@@ -1032,11 +1199,16 @@ df["盈亏比例(%)"] = np.where(
 )
 df.loc[df["持仓成本"] <= 0, "持仓成本"] = np.nan
 
-# 均线多空状态
+# 均线多空状态：价 > MA5 > MA20 才算多头，反之空头，夹在中间是震荡
 def _trend(row: pd.Series) -> str:
-    if pd.isna(row["MA5"]) or pd.isna(row["MA20"]):
+    price, ma5, ma20 = row["现价"], row["MA5"], row["MA20"]
+    if pd.isna(price) or pd.isna(ma5) or pd.isna(ma20):
         return "—"
-    return "多头" if row["MA5"] >= row["MA20"] else "空头"
+    if price > ma5 > ma20:
+        return "多头"
+    if price < ma5 < ma20:
+        return "空头"
+    return "震荡"
 
 
 df["均线"] = df.apply(_trend, axis=1)
@@ -1299,7 +1471,6 @@ def _trend_color(v) -> str:
         return f"color:{DOWN}"
     return f"color:{FLAT}"
 
-
 def _sniper_color(v) -> str:
     if v == SNIPER_HIT:
         return (
@@ -1366,20 +1537,22 @@ def _tone(v) -> str:
         return "t-flat"
 
 
+def _pet(row: pd.Series, hit: bool) -> str:
+    """卡片右上角的精灵：狙击 🐆 / 多头 🦌 / 空头 🐢 / 震荡 🐿️。"""
+    trend = str(row["均线"])
+    if hit:
+        return '<span class="pet-chip hit"><span class="pet pet-cheetah">🐆</span></span>'
+    if trend == "多头":
+        return '<span class="pet-chip"><span class="pet pet-deer">🦌</span></span>'
+    if trend == "空头":
+        return '<span class="pet-chip bear"><span class="pet pet-turtle">🐢</span></span>'
+    return '<span class="pet-chip flat"><span class="pet pet-flat">🐿️</span></span>'
+
+
 def _card_html(row: pd.Series) -> str:
     signal = str(row["狙击预警"])
     hit = signal == SNIPER_HIT
     chg = row["涨跌幅(%)"]
-
-    # 左边框：命中狙击用红，否则跟着当日涨跌走
-    if hit:
-        cls = "hit"
-    elif pd.notna(chg) and float(chg) > 0:
-        cls = "bull"
-    elif pd.notna(chg) and float(chg) < 0:
-        cls = "bear"
-    else:
-        cls = ""
 
     tag_cls = "hit" if hit else "idle"
     name = html.escape(str(row["名称"]))
@@ -1388,9 +1561,10 @@ def _card_html(row: pd.Series) -> str:
     pnl = row["盈亏比例(%)"]
     pnl_txt = _num(pnl, 2, plus=True)
     cost = _num(row["持仓成本"], 3)
+    trend = str(row["均线"])
 
     return (
-        f'<div class="mcard {cls}">'
+        f'<div class="mcard{" hit" if hit else ""}">'
         f'<div class="mcard-h">'
         f'<div><span class="mcard-n">{name}</span><span class="mcard-c">{code}</span></div>'
         f'<span class="mcard-tag {tag_cls}">{html.escape(signal)}</span>'
@@ -1398,6 +1572,7 @@ def _card_html(row: pd.Series) -> str:
         f'<div class="mcard-p">'
         f'<span class="mcard-px">{_num(row["现价"], 3)}</span>'
         f'<span class="mcard-chg {_tone(chg)}">{_num(chg, 2, plus=True)}%</span>'
+        f'<span style="margin-left:auto">{_pet(row, hit)}</span>'
         f"</div>"
         f'<div class="mcard-g">'
         f'<div class="mg"><span>量比</span><b>{_num(row["量比"], 2)}</b></div>'
@@ -1406,7 +1581,7 @@ def _card_html(row: pd.Series) -> str:
         f'<div class="mg"><span>盈亏</span><b class="{_tone(pnl)}">{pnl_txt}{"%" if pnl_txt != "—" else ""}</b></div>'
         f"</div>"
         f'<div class="mcard-f">MA5 {_num(row["MA5"], 3)} · MA20 {_num(row["MA20"], 3)} · '
-        f'{html.escape(str(row["均线"]))}</div>'
+        f'{html.escape(trend)}</div>'
         f"</div>"
     )
 
