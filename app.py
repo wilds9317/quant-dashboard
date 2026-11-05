@@ -957,10 +957,13 @@ def _fetch_raw(symbol: str, kind: str) -> tuple[pd.DataFrame, str]:
     s, e = start.strftime("%Y%m%d"), end.strftime("%Y%m%d")
 
     if kind == "etf":
+        # 必须前复权：ETF 分红除息会在不复权序列上挖一个假缺口，
+        # 除息后 20 个交易日内的 MA5/MA20、乖离率、多空判断会全部被带偏。
+        # 前复权的最后一根 = 当前真实价格，和实时快照能直接对接。
         raw = ak.fund_etf_hist_em(
-            symbol=code6, period="daily", start_date=s, end_date=e, adjust=""
+            symbol=code6, period="daily", start_date=s, end_date=e, adjust="qfq"
         )
-        return _to_frame(raw), "东方财富·ETF日线"
+        return _to_frame(raw), "东方财富·ETF日线(前复权)"
 
     raw = ak.stock_zh_a_hist(
         symbol=code6, period="daily", start_date=s, end_date=e, adjust="qfq"
@@ -975,7 +978,8 @@ def _fetch_backup(symbol: str, kind: str) -> tuple[pd.DataFrame, str]:
 
     if kind == "etf":
         raw = ak.fund_etf_hist_sina(symbol=f"{prefix}{code6}")
-        return _to_frame(raw, "date", "close", None, "volume"), "新浪·ETF日线"
+        # 新浪这个接口没有复权参数，只能给不复权序列 —— 数据源标签里写明，免得误判
+        return _to_frame(raw, "date", "close", None, "volume"), "新浪·ETF日线(不复权)"
     raw = ak.stock_zh_a_daily(symbol=f"{prefix}{code6}", adjust="qfq")
     return _to_frame(raw, "date", "close", None, "volume"), "新浪·A股日线(前复权)"
 
@@ -1140,9 +1144,29 @@ def _metrics(
         chg = float(frame["涨跌幅"].iloc[-1]) if pd.notna(frame["涨跌幅"].iloc[-1]) else np.nan
         open_px = float(frame["开盘"].iloc[-1]) if pd.notna(frame["开盘"].iloc[-1]) else np.nan
 
-    # 均线要把实时价接上，否则盘中 MA 一直停在上一个收盘价
+    # 数据日期取「行情快照自带的时间」，不能直接写今天：
+    # 周末/节假日快照时间还停在上一个交易日，写今天会让「数据日期」变成假信息，
+    # 也会让上面的「非交易日」提示永远不触发。这个日期同时决定均线怎么接实时价。
+    data_date = last_date
+    quote_date = None
     if live:
-        if pd.notna(last_date) and last_date.date() == _today_cn():
+        data_date = pd.Timestamp(_today_cn())
+        ts = quote.get("时间")
+        try:
+            if ts is not None:
+                quote_date = dt.datetime.fromtimestamp(int(ts), CN_TZ).date()
+                data_date = pd.Timestamp(quote_date)
+        except Exception:
+            quote_date = None
+
+    # 均线要把实时价接上，否则盘中 MA 一直停在上一个收盘价。
+    # 只有当「日线最后一根还不包含这笔快照」时才追加；否则替换最后一根。
+    # 否则周末会把周五的收盘价当成新的一天再加一遍，MA5 直接被拉偏。
+    if live:
+        same_bar = pd.notna(last_date) and (
+            last_date.date() >= (quote_date or _today_cn())
+        )
+        if same_bar:
             close.iloc[-1] = price
         else:
             close = pd.concat([close, pd.Series([price])], ignore_index=True)
@@ -1169,7 +1193,7 @@ def _metrics(
         "量比": vol_ratio,
         "MA5": float(close.rolling(5).mean().iloc[-1]) if len(close) >= 5 else np.nan,
         "MA20": float(close.rolling(20).mean().iloc[-1]) if len(close) >= 20 else np.nan,
-        "数据日期": last_date if not live else pd.Timestamp(_today_cn()),
+        "数据日期": data_date,
         "数据源": quote["来源"] if live else source,
         "备注": note,
     }
@@ -1562,6 +1586,14 @@ if AK_ERROR is not None:
     )
     st.stop()
 
+# 监控列表为空时提前收场：否则下面 df["现价"] 会因为一张空表直接 KeyError 崩掉
+if not st.session_state.watchlist:
+    st.info(
+        "监控列表是空的。在左侧「监控列表」里输入代码添加（如 `600519.SH`），"
+        "或点「重置列表」恢复默认 9 只标的。"
+    )
+    st.stop()
+
 with st.spinner("正在抓取行情数据…"):
     raw_rows = load_all(
         tuple((w["symbol"], w["name"], w["kind"]) for w in st.session_state.watchlist),
@@ -1932,6 +1964,8 @@ def _num(v, digits: int = 3, plus: bool = False) -> str:
         return "—"
     if not np.isfinite(f):
         return "—"
+    if f == 0:                       # 涨跌幅正好 0 时不显示 "+0.00"，直接 0.00
+        return f"{f:.{digits}f}"
     return f"{f:+.{digits}f}" if plus else f"{f:.{digits}f}"
 
 
