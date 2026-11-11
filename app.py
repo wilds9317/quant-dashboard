@@ -233,7 +233,7 @@ except Exception as exc:  # pragma: no cover
 
 
 # ----------------------------------------------------------------------------
-# 1. 监控标的：默认 9 只 + 用户手动添加
+# 1. 监控标的：默认 13 只 + 用户手动添加
 # ----------------------------------------------------------------------------
 DEFAULT_WATCHLIST = [
     {"symbol": "510300.SH", "name": "沪深300ETF",  "kind": "etf"},
@@ -245,6 +245,10 @@ DEFAULT_WATCHLIST = [
     {"symbol": "300750.SZ", "name": "宁德时代",    "kind": "stock"},
     {"symbol": "002475.SZ", "name": "立讯精密",    "kind": "stock"},
     {"symbol": "300308.SZ", "name": "中际旭创",    "kind": "stock"},
+    {"symbol": "518880.SH", "name": "黄金ETF",     "kind": "etf"},
+    {"symbol": "601088.SH", "name": "中国神华",    "kind": "stock"},
+    {"symbol": "600276.SH", "name": "恒瑞医药",    "kind": "stock"},
+    {"symbol": "601899.SH", "name": "紫金矿业",    "kind": "stock"},
 ]
 
 DEFAULT_NAMES = {w["symbol"]: w["name"] for w in DEFAULT_WATCHLIST}
@@ -253,7 +257,7 @@ MAX_WATCHLIST = 30
 
 # 排序方式：key 存 URL，value 是下拉框里显示的文字
 SORT_MODES = {
-    "signal": "交易信号（狙击 → 量比 → 涨跌幅）",
+    "signal": "交易信号（值得看一眼 → 量比 → 涨跌幅）",
     "vol": "量比 ↓",
     "chg": "涨跌幅 ↓",
     "pnl": "盈亏比例 ↓",
@@ -359,7 +363,7 @@ def _encode_costs(costs: dict) -> str:
     """成本字典 → 可塞进网址的短串。
 
     只保留真正有值的项（填 0 等于没填），价格压到 3 位小数，键排序后 base64，
-    9 只标的大约 120 个字符，加在 ?c= 后面完全不影响链接可用。
+    13 只标的大约 170 个字符，加在 ?c= 后面完全不影响链接可用。
     """
     slim = {}
     for k, v in (costs or {}).items():
@@ -468,7 +472,7 @@ def _sync_url() -> None:
 
 
 def _init_state() -> None:
-    """初始化会话状态：刷新后从 URL 恢复，否则用默认 9 只。"""
+    """初始化会话状态：刷新后从 URL 恢复，否则用默认清单。"""
     if "watchlist" not in st.session_state:
         restored = _parse_watchlist(st.query_params.get("wl", ""))
         st.session_state.watchlist = restored or [dict(w) for w in DEFAULT_WATCHLIST]
@@ -561,6 +565,16 @@ Q_RIBBON = (
     else "linear-gradient(180deg, #6cbb85 0%, #3d8a57 100%)"
 )
 
+# 今日摘要条：跟指数条、KPI 卡用同一层「深林」材质。
+# 一开始试过浅色版，结果浅色主题下变成 浅箴言→深指数→浅摘要→深 KPI，
+# 一深一浅来回跳，看着像没加载完。统一成深色后整页就顺了。
+BR_BG = "linear-gradient(180deg, #16281c 0%, #050a06 88%)"
+BR_BORDER = "rgba(255,255,255,.10)"
+BR_T = "#f2f5f8"
+BR_M = "rgba(236,239,243,.42)"
+BR_IT = "rgba(255,255,255,.07)"
+BR_ACC = "#8fd8a8"
+
 st.markdown(
     """
 <style>
@@ -639,6 +653,31 @@ st.markdown(
       line-height: 1.75; letter-spacing: .02em;
   }
   .quote-a { font-size: 11.5px; color: __Q_AU__; margin-top: 5px; letter-spacing: .04em; }
+  /* ---------- 今日摘要：一句话交代今天要不要管 ---------- */
+  .brief {
+      display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+      padding: 12px 20px; margin: 0 0 18px 0; border-radius: 13px;
+      border: 1px solid __BR_BORDER__; background-image: __BR_BG__;
+      font-family: -apple-system, "SF Pro Text", "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  .brief-t {
+      font-size: 13px; font-weight: 700; letter-spacing: .07em;
+      color: __BR_T__; white-space: nowrap;
+  }
+  .brief-t em {
+      font-style: normal; font-size: 17px; font-weight: 800;
+      color: __BR_ACC__; margin: 0 3px;
+      font-variant-numeric: tabular-nums;
+  }
+  .brief-q { font-size: 12.5px; color: __BR_M__; letter-spacing: .02em; line-height: 1.6; }
+  .brief-list { display: flex; gap: 7px; flex-wrap: wrap; }
+  .brief-it {
+      font-size: 12px; padding: 4px 10px; border-radius: 7px;
+      background: __BR_IT__; color: __BR_T__;
+      font-variant-numeric: tabular-nums; white-space: nowrap;
+  }
+  .brief-it b { font-weight: 700; }
+  .brief-it.more { color: __BR_M__; }
   .kpi-row { display: flex; gap: 12px; margin-bottom: 18px; flex-wrap: wrap; }
   .kpi { flex: 1 1 0; min-width: 150px; padding: 15px 17px; border-radius: 13px; }
   .kpi-l {
@@ -745,11 +784,11 @@ st.markdown(
       position: relative; overflow: hidden;
       padding: 14px 16px 13px;
       border-radius: 16px;
-      color: #16351f;
+      color: #faf1e4;
       font-family: -apple-system, "SF Pro Text", "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
-      background: linear-gradient(170deg, #f3faf0 0%, #e2f1d9 100%);
-      border: 1px solid rgba(31,77,46,.14);
-      box-shadow: 0 2px 10px -6px rgba(21,54,32,.32);
+      background: linear-gradient(170deg, #7d5f45 0%, #5e4430 100%);
+      border: 1px solid rgba(255,255,255,.13);
+      box-shadow: 0 6px 18px -10px rgba(0,0,0,.55);
   }
 
   /* 显著异动：静态红边，不再呼吸闪烁 */
@@ -762,9 +801,9 @@ st.markdown(
       display: flex; align-items: center; justify-content: space-between;
       gap: 8px; position: relative; z-index: 1;
   }
-  .mcard-n { font-size: 16px; font-weight: 750; color: #12331c; letter-spacing: .01em; }
+  .mcard-n { font-size: 16px; font-weight: 750; color: #fdf6ec; letter-spacing: .01em; }
   .mcard-c {
-      font-size: 11px; color: #4e7c5e; margin-left: 6px;
+      font-size: 11px; color: #d6c2a8; margin-left: 6px;
       font-variant-numeric: tabular-nums;
   }
   .mcard-tag {
@@ -776,8 +815,8 @@ st.markdown(
       box-shadow: 0 0 10px rgba(225,29,72,.55);
   }
   .mcard-tag.idle {
-      background: rgba(31,77,46,.10); color: #3d6b4d;
-      box-shadow: inset 0 0 0 1px rgba(31,77,46,.08);
+      background: rgba(255,255,255,.15); color: #f4e9d8;
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,.12);
   }
 
   /* ---------- 卡片里的状态图标（静态，不做动画） ---------- */
@@ -790,8 +829,8 @@ st.markdown(
   .pet-chip {
       display: inline-flex; align-items: center; justify-content: center;
       width: 40px; height: 40px; border-radius: 50%; flex: none;
-      background: rgba(21,128,61,.12);
-      box-shadow: inset 0 0 0 1px rgba(21,128,61,.20);
+      background: rgba(255,255,255,.13);
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,.18);
   }
   .pet-chip.bear {
       background: rgba(217,45,32,.11);
@@ -802,8 +841,8 @@ st.markdown(
       box-shadow: inset 0 0 0 1px rgba(225,29,72,.38);
   }
   .pet-chip.flat {
-      background: rgba(31,77,46,.07);
-      box-shadow: inset 0 0 0 1px rgba(31,77,46,.12);
+      background: rgba(255,255,255,.07);
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,.12);
   }
 
   /* 异动标记：只用文字和小方块，不加光不加动效 */
@@ -812,15 +851,16 @@ st.markdown(
       padding: 2px 7px; border-radius: 5px; white-space: nowrap;
       font-variant-numeric: tabular-nums;
   }
-  .mcard-z.up   { background: rgba(217,45,32,.14); color: #b42318; }
-  .mcard-z.down { background: rgba(21,128,61,.14); color: #15803d; }
+  .mcard-z.up   { background: rgba(255,122,107,.20); color: #ffb9ac; }
+  .mcard-z.down { background: rgba(92,224,142,.18); color: #8feab5; }
 
   .mcard-p {
       display: flex; align-items: center; gap: 10px;
       margin: 9px 0 10px; position: relative; z-index: 1;
   }
+  /* 现价用暖棕：红涨绿跌只留给涨跌幅和盈亏，数字本身不参与抢色 */
   .mcard-px {
-      font-size: 26px; font-weight: 800; color: #0f2e19;
+      font-size: 26px; font-weight: 800; color: #fffaf1;
       font-variant-numeric: tabular-nums; line-height: 1.05; letter-spacing: -.01em;
   }
   .mcard-chg { font-size: 15px; font-weight: 800; font-variant-numeric: tabular-nums; }
@@ -830,22 +870,31 @@ st.markdown(
   }
   .mg {
       display: flex; justify-content: space-between; gap: 6px; font-size: 12px;
-      border-top: 1px dashed rgba(31,77,46,.20); padding-top: 5px;
+      border-top: 1px dashed rgba(255,255,255,.20); padding-top: 5px;
   }
-  .mg span { color: #4f7a5f; white-space: nowrap; }
-  .mg b { font-weight: 700; color: #14361f; font-variant-numeric: tabular-nums; }
+  .mg span { color: #dac7ae; white-space: nowrap; }
+  /* 量比 / 成本这类「没有方向」的数值也用棕，避免深绿被误读成「跌」 */
+  .mg b { font-weight: 700; color: #f9f0e2; font-variant-numeric: tabular-nums; }
   /* 提权：否则 .mg b 会把涨跌红绿盖掉（之前乖离/盈亏一直显示成深绿就是这个原因） */
-  .mg b.t-up { color: #d92d20; }
-  .mg b.t-down { color: #0b7a3d; }
-  .mg b.t-flat { color: #4e7c5e; }
+  .mg b.t-up { color: #ff7a6b; }
+  .mg b.t-down { color: #5ce08e; }
+  .mg b.t-flat { color: #dac7ae; }
   .mcard-f {
-      margin-top: 8px; font-size: 11px; color: #5d8a6b;
+      margin-top: 8px; font-size: 11px; color: #cdb89d;
       font-variant-numeric: tabular-nums; letter-spacing: .02em;
       position: relative; z-index: 1;
   }
-  .t-up { color: #d92d20; }
-  .t-down { color: #0b7a3d; }
-  .t-flat { color: #4e7c5e; }
+  .t-up { color: #ff7a6b; }
+  .t-down { color: #5ce08e; }
+  .t-flat { color: #dac7ae; }
+  /* 数据可信度角标：低对比、小，只用来提示「这个数字别太当真」 */
+  .mcard-flag {
+      display: inline-block; margin-left: 5px; padding: 0 4px;
+      font-size: 9.5px; line-height: 14px; border-radius: 4px;
+      vertical-align: 1px; cursor: help;
+      background: rgba(255,255,255,.17); color: #f0e3cf;
+      font-weight: 600; letter-spacing: 0;
+  }
 
   /* ---------- 窄屏（手机）适配 ---------- */
   @media (max-width: 760px) {
@@ -859,6 +908,11 @@ st.markdown(
       .quote { padding: 13px 16px; gap: 10px; margin-bottom: 14px; border-radius: 12px; }
       .quote-t { font-size: 13px; line-height: 1.7; }
       .quote::before { right: 16px; width: 17px; height: 13px; }
+      .brief { padding: 10px 13px; gap: 8px; margin-bottom: 14px; border-radius: 10px; }
+      .brief-t { font-size: 12px; }
+      .brief-t em { font-size: 15px; }
+      .brief-q { font-size: 12px; }
+      .brief-it { font-size: 11.5px; padding: 3px 8px; }
       /* 三个指数挤在一行，不变成三条大块 */
       .idx-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
       .idx {
@@ -904,7 +958,13 @@ st.markdown(
     .replace("__Q_TXT__", Q_TXT)
     .replace("__Q_AU__", Q_AU)
     .replace("__Q_LABEL__", Q_LABEL)
-    .replace("__Q_RIBBON__", Q_RIBBON),
+    .replace("__Q_RIBBON__", Q_RIBBON)
+    .replace("__BR_BG__", BR_BG)
+    .replace("__BR_BORDER__", BR_BORDER)
+    .replace("__BR_T__", BR_T)
+    .replace("__BR_M__", BR_M)
+    .replace("__BR_IT__", BR_IT)
+    .replace("__BR_ACC__", BR_ACC),
     unsafe_allow_html=True,
 )
 
@@ -1480,7 +1540,7 @@ with st.sidebar:
     st.markdown("#### 监控列表")
     st.caption(
         f"当前 {len(st.session_state.watchlist)} 只。支持 600519.SH / 000858.SZ，"
-        "不写交易所会自动补全；添加后均线 / 量比 / 狙击预警全部自动计算。"
+        "不写交易所会自动补全；添加后均线 / 量比 / 信号全部自动计算。"
     )
 
     # 用会变的 key 让输入框在添加后自动清空（st.text_input 无法直接改 widget 值）
@@ -1500,7 +1560,7 @@ with st.sidebar:
 
     if _c2.button("重置列表", **_full_width(st.button)):
         st.session_state.watchlist = [dict(w) for w in DEFAULT_WATCHLIST]
-        st.session_state.wl_msg = ("ok", "已恢复默认 9 只标的")
+        st.session_state.wl_msg = ("ok", f"已恢复默认 {len(DEFAULT_WATCHLIST)} 只标的")
         _sync_url()
         st.rerun()
 
@@ -1579,8 +1639,8 @@ with st.sidebar:
     st.divider()
     st.markdown("#### 成本同步")
     st.caption(
-        "成本跟着**网址**走（地址栏里的 `?c=…`）。同一条链接在电脑和手机打开，"
-        "看到的成本一模一样；关掉浏览器、手机切后台回来，也都还在。"
+        "你填的成本会存进下面这条链接里。把链接发到手机，两边看到的一样；"
+        "关掉浏览器、手机切后台回来，也都还在。"
     )
 
     _link = _share_link()
@@ -1591,9 +1651,9 @@ with st.sidebar:
             key=f"share_box_{hashlib.md5(_link.encode()).hexdigest()[:10]}",
             help="点一下输入框全选，复制后发到微信，手机点开就是同一份数据。",
         )
-        st.caption("任一端改完成本，地址栏会自动更新；把新链接重新发一次，两端就对齐了。")
+        st.caption("哪一端改过成本，链接就会变；把新链接再发一次，两端就对齐了。")
     else:
-        st.caption("在上面填好成本，这里就会出现可以复制的链接。")
+        st.caption("先在上方的「持仓成本」表格里填上数字，这里就会生成链接。")
 
     with st.expander("备份 / 恢复成本", expanded=False):
         _export = {k: round(float(v), 3) for k, v in st.session_state.costs.items() if float(v or 0) > 0}
@@ -1657,7 +1717,7 @@ if AK_ERROR is not None:
 if not st.session_state.watchlist:
     st.info(
         "监控列表是空的。在左侧「监控列表」里输入代码添加（如 `600519.SH`），"
-        "或点「重置列表」恢复默认 9 只标的。"
+        f"或点「重置列表」恢复默认 {len(DEFAULT_WATCHLIST)} 只标的。"
     )
     st.stop()
 
@@ -1727,9 +1787,9 @@ def _trend(row: pd.Series) -> str:
 df["均线"] = df.apply(_trend, axis=1)
 
 # ----------------------------------------------------------------------------
-# 5b. 狙击预警：均线 / 量能 / 乖离 三条件同时满足
+# 5b. 信号：均线 / 量能 / 乖离 三条件同时满足
 # ----------------------------------------------------------------------------
-SNIPER_HIT = "🔥 准备狙击"
+SNIPER_HIT = "值得看一眼"
 SNIPER_IDLE = "观望"
 VOL_RATIO_MIN = 1.5      # 量比门槛：放量才算数
 BIAS_MAX = 2.0           # 距离 MA5 的乖离上限（%），超过就是追高
@@ -1766,7 +1826,7 @@ def _sniper(row: pd.Series) -> str:
     return SNIPER_HIT if (trend_ok and volume_ok and bias_ok) else SNIPER_IDLE
 
 
-df["狙击预警"] = df.apply(_sniper, axis=1)
+df["信号"] = df.apply(_sniper, axis=1)
 
 
 # ----------------------------------------------------------------------------
@@ -1777,7 +1837,7 @@ def _sort_view(frame: pd.DataFrame, mode: str) -> pd.DataFrame:
     out = frame.copy()
     # 信号档位：0 狙击 / 1 观望 / 2 无数据（没数据的沉到最底）
     out["_signal_rank"] = (
-        out["狙击预警"].map({SNIPER_HIT: 0, SNIPER_IDLE: 1}).fillna(2).astype(int)
+        out["信号"].map({SNIPER_HIT: 0, SNIPER_IDLE: 1}).fillna(2).astype(int)
     )
 
     if mode == "vol":
@@ -1799,7 +1859,7 @@ df = _sort_view(df, SORT_MODE)
 # 列序按「信息密度」排：先信号、再身份与价格，常用指标跟上，
 # MA20 / 均线这类一眼就能从走势看出的判断放最后（手机上先被裁掉也不心疼）。
 VIEW_COLS = [
-    "狙击预警",      # 1 最重要：今天要不要动手
+    "信号",      # 1 最重要：今天要不要动手
     "名称",          # 2 是谁
     "代码",
     "现价",          # 3 现在多少钱
@@ -1815,7 +1875,7 @@ VIEW_COLS = [
 view = df[VIEW_COLS].copy()
 
 # 卡片还要显示「日波动 / 异动倍数」，但表格里不需要这两列，所以单独拼一份给卡片用
-card_view = view.join(df[["波动率", "异动z"]])
+card_view = view.join(df[["波动率", "异动z", "数据源", "备注"]])
 
 
 # ----------------------------------------------------------------------------
@@ -1898,6 +1958,79 @@ if is_stale:
         f"以下为最近交易日 **{date_txt}** 的收盘数据。"
     )
 
+# --- 今日摘要：把 9 张卡片压成一行，先说清「今天到底要不要管」 ---
+def _today_brief(frame: pd.DataFrame) -> list[tuple[str, str]]:
+    """只挑出「今天确实出事」的标的，按离谱程度排序。
+
+    门槛故意定得高。摘要的价值在于「大多数日子什么都不用管」，
+    所以宁可漏报，也不要把半个列表都染上颜色——那样每天都是警报，
+    三天之后人就学会无视它了。
+    """
+    out: list[tuple[float, str, str]] = []
+    for _, r in frame.iterrows():
+        if pd.isna(r["现价"]):
+            continue
+        name = str(r["名称"])
+        chg = r["涨跌幅(%)"]
+        vol = r["量比"]
+        pnl = r["盈亏比例(%)"]
+        ma20 = r["MA20"]
+        price = r["现价"]
+        z = r.get("异动z", np.nan)
+
+        tags = []
+        if pd.notna(z) and abs(float(z)) >= Z_ALERT:
+            tags.append(f"异动 ×{abs(float(z)):.1f}")
+        if pd.notna(chg) and abs(float(chg)) >= 5.0:
+            tags.append(f"{'涨' if float(chg) > 0 else '跌'} {abs(float(chg)):.1f}%")
+        if pd.notna(pnl) and abs(float(pnl)) >= 10.0:
+            tags.append(f"浮{'盈' if float(pnl) > 0 else '亏'} {abs(float(pnl)):.1f}%")
+        if pd.notna(vol) and float(vol) >= 2.0:
+            tags.append(f"成交 {float(vol):.1f} 倍")
+        if pd.notna(ma20) and float(ma20) > 0:
+            gap = (float(price) / float(ma20) - 1) * 100
+            if gap <= -8.0:
+                tags.append(f"低于 MA20 {abs(gap):.0f}%")
+
+        if tags:
+            sev = abs(float(chg)) if pd.notna(chg) else 0.0
+            if pd.notna(z):
+                sev += abs(float(z)) * 2
+            out.append((sev, name, " · ".join(tags[:2])))
+
+    out.sort(key=lambda x: -x[0])
+    return [(n, t) for _, n, t in out]
+
+
+_events = _today_brief(df)
+_n_valid = int(df["现价"].notna().sum())
+_when = "上个交易日" if is_stale else "今天"
+
+if _events:
+    _show = _events[:3]
+    _rest = len(_events) - len(_show)
+    _items = "".join(
+        f'<div class="brief-it"><b>{html.escape(n)}</b>　{t}</div>' for n, t in _show
+    )
+    if _rest > 0:
+        _items += f'<div class="brief-it more">另有 {_rest} 只</div>'
+    st.markdown(
+        '<div class="brief">'
+        f'<div class="brief-t">{_when} <em>{len(_events)}</em> 件事</div>'
+        f'<div class="brief-list">{_items}</div>'
+        "</div>",
+        unsafe_allow_html=True,
+    )
+else:
+    st.markdown(
+        '<div class="brief">'
+        f'<div class="brief-t">{_when}没事</div>'
+        f'<div class="brief-q">这 {_n_valid} 只都安静 —— 没有放量、没有异动，'
+        "也没有哪只跌得离谱。不用动手。</div>"
+        "</div>",
+        unsafe_allow_html=True,
+    )
+
 # ----------------------------------------------------------------------------
 # 7. 概览 KPI
 # ----------------------------------------------------------------------------
@@ -1948,9 +2081,9 @@ st.markdown(f'<div class="kpi-row">{"".join(cards)}</div>', unsafe_allow_html=Tr
 
 
 # ----------------------------------------------------------------------------
-# 8. 狙击预警条（st.markdown 渲染，红色脉冲高亮）
+# 8. 信号条（st.markdown 渲染，红色脉冲高亮）
 # ----------------------------------------------------------------------------
-hits = df[df["狙击预警"] == SNIPER_HIT]
+hits = df[df["信号"] == SNIPER_HIT]
 
 
 def _hit_item(r: pd.Series) -> str:
@@ -1972,7 +2105,7 @@ if len(hits):
 else:
     st.markdown(
         '<div class="sniper-idle">'
-        "🔥 <b>狙击预警</b>　当前无标的满足全部条件"
+        "👀 <b>值得看一眼</b>　暂无标的满足全部条件"
         f"（均线/开盘价之上 · 量比 &gt; {VOL_RATIO_MIN} · 距 MA5 乖离 ≤ {BIAS_MAX:.0f}%）"
         "</div>",
         unsafe_allow_html=True,
@@ -2039,7 +2172,7 @@ styler = disp.style
 styler = _apply(styler, _pct_color, ["涨跌幅(%)", "盈亏比例(%)"])
 styler = _apply(styler, _trend_color, ["均线"])
 styler = _apply(styler, _pct_color, ["乖离率(%)"])
-styler = _apply(styler, _sniper_color, ["狙击预警"])
+styler = _apply(styler, _sniper_color, ["信号"])
 
 
 # ----------------------------------------------------------------------------
@@ -2084,8 +2217,32 @@ def _pet(row: pd.Series, hit: bool) -> str:
     return '<span class="pet-chip flat"><span class="pet pet-flat">🐿️</span></span>'
 
 
+def _card_flags(row: pd.Series) -> tuple[str, str]:
+    """数据可信度角标。返回 (html, 类型串)。
+
+    只标两件事：走了备援源（可能未复权）、日线不够算均线。
+    其余情况一个都不挂——角标挂多了就等于没挂。
+    """
+    out, kinds = [], ""
+    src = str(row.get("数据源", "") or "")
+    note = str(row.get("备注", "") or "")
+    if "新浪" in src:
+        out.append(
+            '<span class="mcard-flag" title="走的是新浪备援行情，'
+            'ETF 可能未复权，均线与乖离会有偏差">备</span>'
+        )
+        kinds += "备"
+    if pd.isna(row["MA5"]) or pd.isna(row["MA20"]) or "日线缺失" in note:
+        out.append(
+            '<span class="mcard-flag" title="日线样本不足，'
+            '均线算不出来，下面的 MA5 / MA20 是空的">缺</span>'
+        )
+        kinds += "缺"
+    return "".join(out), kinds
+
+
 def _card_html(row: pd.Series) -> str:
-    signal = str(row["狙击预警"])
+    signal = str(row["信号"])
     hit = signal == SNIPER_HIT
     chg = row["涨跌幅(%)"]
 
@@ -2097,6 +2254,7 @@ def _card_html(row: pd.Series) -> str:
     pnl_txt = _num(pnl, 2, plus=True)
     cost = _num(row["持仓成本"], 3)
     trend = str(row["均线"])
+    flags_html, _ = _card_flags(row)
 
     # 异动标记：只有明显超出这只票自己的日常振幅时才出现，平时一个都不显示。
     # 放在底部那行，不挤价格行——否则一出现就会把右侧的图标顶走。
@@ -2119,7 +2277,7 @@ def _card_html(row: pd.Series) -> str:
     return (
         f'<div class="mcard{" hit" if hit else ""}">'
         f'<div class="mcard-h">'
-        f'<div><span class="mcard-n">{name}</span><span class="mcard-c">{code}</span></div>'
+        f'<div><span class="mcard-n">{name}</span><span class="mcard-c">{code}</span>{flags_html}</div>'
         f'<span class="mcard-tag {tag_cls}">{html.escape(signal)}</span>'
         f"</div>"
         f'<div class="mcard-p">'
@@ -2147,10 +2305,25 @@ if USE_CARDS:
 else:
     st.dataframe(styler, height=420, **_full_width(st.dataframe))
 
+# 有角标才解释角标；一只都没挂的时候不加废话
+if USE_CARDS:
+    _flag_kinds = "".join(_card_flags(r)[1] for _, r in card_view.iterrows())
+    if _flag_kinds:
+        _legend = []
+        if "备" in _flag_kinds:
+            _legend.append("**备** 走的是备援数据源，ETF 可能未复权")
+        if "缺" in _flag_kinds:
+            _legend.append("**缺** 日线样本不足，均线算不出来")
+        st.caption("卡片角标：" + " · ".join(_legend) + "。")
+
 st.caption(
     "量比 = 最新成交量 ÷ 前 5 日均量；盘中为未完成成交量，收盘后才有意义。"
+    "乖离率 =（现价 ÷ MA5 − 1）× 100%，就是现价离 5 日均线有多远；"
+    "正数在均线上方、负数在下方，越贴近 0 说明越没追高。"
     "涨跌幅与盈亏按 A 股习惯红涨绿跌。"
-    f"狙击预警 = 站上 MA5 或开盘价 且 量比 > {VOL_RATIO_MIN} 且 |乖离率| ≤ {BIAS_MAX:.0f}%，三者同时满足才点亮。"
+)
+st.caption(
+    f"信号 = 站上 MA5 或开盘价 且 量比 > {VOL_RATIO_MIN} 且 |乖离率| ≤ {BIAS_MAX:.0f}%，三者同时满足才点亮。"
     f"当前排序：{SORT_MODES.get(SORT_MODE, SORT_MODES['signal'])}（可在左侧切换）"
 )
 
