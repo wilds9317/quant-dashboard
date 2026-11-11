@@ -551,24 +551,24 @@ HERO_LINE = "rgba(255,255,255,.07)" if DARK else "rgba(18,33,26,.12)"
 
 # 每日箴言卡：深色主题走暗绿夜色，浅色主题走柔绿纸感（两边都用绿色系，不跑偏）
 Q_BG = (
-    "linear-gradient(160deg, rgba(30,72,45,.60) 0%, rgba(11,26,17,.55) 100%)"
+    "linear-gradient(160deg, rgba(66,48,33,.60) 0%, rgba(16,12,8,.55) 100%)"
     if DARK
-    else "linear-gradient(160deg, #f2faec 0%, #e3f2d8 100%)"
+    else "linear-gradient(160deg, #fbf4e8 0%, #f0e2cf 100%)"
 )
-Q_BORDER = "rgba(130,205,160,.22)" if DARK else "rgba(31,77,46,.14)"
-Q_TXT = "#e2ece5" if DARK else "#1b3a25"
-Q_AU = "rgba(158,198,170,.66)" if DARK else "rgba(27,58,37,.55)"
-Q_LABEL = "#84c99e" if DARK else "#3f7d55"
+Q_BORDER = "rgba(214,178,134,.22)" if DARK else "rgba(122,90,58,.18)"
+Q_TXT = "#efe4d4" if DARK else "#3a2b1d"
+Q_AU = "rgba(214,190,160,.66)" if DARK else "rgba(58,43,29,.55)"
+Q_LABEL = "#d3ab7c" if DARK else "#8a6f52"
 Q_RIBBON = (
-    "linear-gradient(180deg, #55ad72 0%, #2f7b4a 100%)"
+    "linear-gradient(180deg, #c79a67 0%, #8a6141 100%)"
     if DARK
-    else "linear-gradient(180deg, #6cbb85 0%, #3d8a57 100%)"
+    else "linear-gradient(180deg, #b98f63 0%, #7d5f45 100%)"
 )
 
 # 今日摘要条：跟指数条、KPI 卡用同一层「深林」材质。
 # 一开始试过浅色版，结果浅色主题下变成 浅箴言→深指数→浅摘要→深 KPI，
 # 一深一浅来回跳，看着像没加载完。统一成深色后整页就顺了。
-BR_BG = "linear-gradient(180deg, #16281c 0%, #050a06 88%)"
+BR_BG = "linear-gradient(180deg, #241f1a 0%, #0b0907 88%)"
 BR_BORDER = "rgba(255,255,255,.10)"
 BR_T = "#f2f5f8"
 BR_M = "rgba(236,239,243,.42)"
@@ -583,8 +583,8 @@ st.markdown(
       position: relative; overflow: hidden;
       font-family: -apple-system, "SF Pro Text", "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
       background-image:
-          radial-gradient(120% 110% at 8% 0%, rgba(180,255,205,.09) 0%, rgba(255,255,255,0) 54%),
-          linear-gradient(180deg, #16281c 0%, #050a06 88%);
+          radial-gradient(120% 110% at 8% 0%, rgba(255,232,206,.055) 0%, rgba(255,255,255,0) 54%),
+          linear-gradient(180deg, #241f1a 0%, #0b0907 88%);
       border: 1px solid rgba(255,255,255,.10);
       box-shadow:
           inset 0 1px 0 rgba(255,255,255,.08),
@@ -715,7 +715,7 @@ st.markdown(
       display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
       padding: 12px 18px; margin: 0 0 16px 0; border-radius: 12px;
       border: 1px solid rgba(255,255,255,.085);
-      background-image: linear-gradient(180deg, #171b20 0%, #0a0c0f 88%);
+      background-image: linear-gradient(180deg, #221d18 0%, #0b0907 88%);
       box-shadow: inset 0 1px 0 rgba(255,255,255,.06), 0 12px 26px -18px rgba(0,0,0,.8);
       font-size: 13px; color: rgba(236,239,243,.55);
   }
@@ -816,32 +816,6 @@ st.markdown(
   }
   .mcard-tag.idle {
       background: rgba(255,255,255,.15); color: #f4e9d8;
-      box-shadow: inset 0 0 0 1px rgba(255,255,255,.12);
-  }
-
-  /* ---------- 卡片里的状态图标（静态，不做动画） ---------- */
-  .pet {
-      font-size: 25px; line-height: 1; display: block;
-      font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
-  }
-  .pet-flat { opacity: .62; }
-  /* 状态圆台：多头绿底、空头红底、显著异动红底 */
-  .pet-chip {
-      display: inline-flex; align-items: center; justify-content: center;
-      width: 40px; height: 40px; border-radius: 50%; flex: none;
-      background: rgba(255,255,255,.13);
-      box-shadow: inset 0 0 0 1px rgba(255,255,255,.18);
-  }
-  .pet-chip.bear {
-      background: rgba(217,45,32,.11);
-      box-shadow: inset 0 0 0 1px rgba(217,45,32,.22);
-  }
-  .pet-chip.hit {
-      background: rgba(225,29,72,.14);
-      box-shadow: inset 0 0 0 1px rgba(225,29,72,.38);
-  }
-  .pet-chip.flat {
-      background: rgba(255,255,255,.07);
       box-shadow: inset 0 0 0 1px rgba(255,255,255,.12);
   }
 
@@ -2205,18 +2179,6 @@ def _tone(v) -> str:
         return "t-flat"
 
 
-def _pet(row: pd.Series, hit: bool) -> str:
-    """卡片右上角的精灵：狙击 🐆 / 多头 🦌 / 空头 🐢 / 震荡 🐿️。"""
-    trend = str(row["均线"])
-    if hit:
-        return '<span class="pet-chip hit"><span class="pet pet-cheetah">🐆</span></span>'
-    if trend == "多头":
-        return '<span class="pet-chip"><span class="pet pet-deer">🦌</span></span>'
-    if trend == "空头":
-        return '<span class="pet-chip bear"><span class="pet pet-turtle">🐢</span></span>'
-    return '<span class="pet-chip flat"><span class="pet pet-flat">🐿️</span></span>'
-
-
 def _card_flags(row: pd.Series) -> tuple[str, str]:
     """数据可信度角标。返回 (html, 类型串)。
 
@@ -2283,7 +2245,6 @@ def _card_html(row: pd.Series) -> str:
         f'<div class="mcard-p">'
         f'<span class="mcard-px">{_num(row["现价"], 3)}</span>'
         f'<span class="mcard-chg {_tone(chg)}">{_num(chg, 2, plus=True)}%</span>'
-        f'<span style="margin-left:auto">{_pet(row, hit)}</span>'
         f"</div>"
         f'<div class="mcard-g">'
         f'<div class="mg"><span>量比</span><b>{_num(row["量比"], 2)}</b></div>'
