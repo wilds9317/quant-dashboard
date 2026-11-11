@@ -164,19 +164,30 @@ def _snipe_gate(now: dt.datetime | None = None) -> dict:
     }
 
 
+AUTO_SEC = 15   # 盘中自动刷新间隔（秒）。只打一次批量报价接口，13 只一起拿
+
+
 def _cache_ttl() -> int:
-    """盘中 45 秒就要新数据；午休/收盘后没必要反复打接口。"""
+    """盘中最快 15 秒；午休 5 分钟；收盘后 15 分钟。"""
     phase = _market_phase()
     if phase == "open":
-        return 45
+        return AUTO_SEC
     if phase == "break":
-        return 120
+        return 300
     return 900
 
 
 def _cache_bucket() -> int:
-    """把时间切成桶；桶号参与缓存键，从而做到“动态 TTL”。"""
-    return int(time.time() // _cache_ttl())
+    """把时间切成桶；桶号参与缓存键，从而做到“动态 TTL”。
+
+    手动点刷新时 _force_rev +1，桶号跳开，请求立刻穿透缓存；
+    日线缓存不受影响（它 30 分钟才过期），所以手刷也不会慢。
+    """
+    try:
+        rev = int(st.session_state.get("_force_rev", 0))
+    except Exception:
+        rev = 0
+    return int(time.time() // _cache_ttl()) + rev * 100_000
 
 # 成本持久化只走「写进网址」这一条路（见 _encode_costs / _share_link）。
 # 早先那版依赖 WorkBuddy 云服务的登录组件（cloudsync/ + cloud_config.py）需要绑定
@@ -838,6 +849,15 @@ st.markdown(
       font-variant-numeric: tabular-nums; line-height: 1.05; letter-spacing: -.01em;
   }
   .mcard-chg { font-size: 15px; font-weight: 800; font-variant-numeric: tabular-nums; }
+  /* 日内动量箭头：深棕底上必须提亮，否则红绿糊成一团 */
+  .mo {
+      font-style: normal; font-size: .72em; margin-left: 3px;
+      vertical-align: .30em; font-weight: 800; letter-spacing: 0;
+  }
+  /* 量比那格字号只有 12px，箭头要按 1em 才看得见 */
+  .mg b .mo { font-size: 1em; vertical-align: .08em; }
+  .mo.up { color: #ff6b57; }
+  .mo.down { color: #4fd98a; }
   .mcard-g {
       display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: 6px 14px; position: relative; z-index: 1;
@@ -1034,6 +1054,20 @@ def _fetch_backup(symbol: str, kind: str) -> tuple[pd.DataFrame, str]:
         return _to_frame(raw, "date", "close", None, "volume"), "新浪·ETF日线(不复权)"
     raw = ak.stock_zh_a_daily(symbol=f"{prefix}{code6}", adjust="qfq")
     return _to_frame(raw, "date", "close", None, "volume"), "新浪·A股日线(前复权)"
+
+
+# 日线缓存：15 秒刷新时绝不能重抓 13 只日线，否则等于每 15 秒打一轮历史接口，
+# 那才是真会被封 IP 的地方。均线是慢变量，30 分钟取一次完全够。
+@st.cache_data(ttl=1800, show_spinner=False)
+def _hist_main(symbol: str, kind: str) -> tuple[pd.DataFrame, str]:
+    frame, source = _fetch_raw(symbol, kind)
+    return frame.copy(), source
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def _hist_backup(symbol: str, kind: str) -> tuple[pd.DataFrame, str]:
+    frame, source = _fetch_backup(symbol, kind)
+    return frame.copy(), source
 
 
 def _num_or_nan(v) -> float:
@@ -1313,10 +1347,10 @@ def load_all(specs: tuple[tuple[str, str, str], ...], bucket: int = 0) -> list[d
         other = "stock" if kind == "etf" else "etf"
         # 日线只用来算均线：主源 → 备援 → 猜错类型再救一次
         chain = (
-            (_fetch_raw, kind, "主"),
-            (_fetch_backup, kind, "备"),
-            (_fetch_raw, other, "主·另一类"),
-            (_fetch_backup, other, "备·另一类"),
+            (_hist_main, kind, "主"),
+            (_hist_backup, kind, "备"),
+            (_hist_main, other, "主·另一类"),
+            (_hist_backup, other, "备·另一类"),
         )
         errors: list[str] = []
         row: dict | None = None
@@ -1481,7 +1515,13 @@ with st.sidebar:
         "盘中自动刷新",
         value=True,
         key="auto_refresh_on",
-        help="交易时段每 45 秒自动拉一次行情；收盘后不刷新。页面关掉就不再请求。",
+        help=f"交易时段每 {AUTO_SEC} 秒拉一次行情（只打一次批量报价接口）；收盘后不请求。页面关掉就停。",
+    )
+    _at = st.session_state.get("_last_load_dt")
+    st.caption(
+        (f"上次抓数 {_at:%H:%M:%S} · 盘中每 {AUTO_SEC} 秒自动刷新")
+        if _at
+        else f"盘中每 {AUTO_SEC} 秒自动刷新；非交易时段不请求接口。"
     )
 
     st.divider()
@@ -1659,9 +1699,10 @@ with st.sidebar:
 
     st.divider()
     if st.button("立即刷新数据", **_full_width(st.button)):
-        st.cache_data.clear()
+        # 只推进时间桶让报价重取，不清日线缓存——清了要重抓 13 只历史，反而慢
+        st.session_state["_force_rev"] = st.session_state.get("_force_rev", 0) + 1
         st.rerun()
-    st.caption("行情缓存 15 分钟，避免频繁请求被封。")
+    st.caption("抓的是东财实时批量报价，一次请求覆盖全部标的，不会因为刷新快被封。")
 
 COST = {str(row["代码"]): float(row["持仓成本"] or 0.0) for _, row in edited.iterrows()}
 
@@ -1698,8 +1739,10 @@ if not st.session_state.watchlist:
 _SPECS = tuple((w["symbol"], w["name"], w["kind"]) for w in st.session_state.watchlist)
 
 with st.spinner("正在抓取行情数据…"):
+    st.session_state["_load_started"] = time.time()   # 从「开始抓」算 15 秒，抓得慢也不会立刻再跑
     raw_rows = load_all(_SPECS, _cache_bucket())
     st.session_state["_last_load"] = time.time()   # 给自动刷新判断“距上次抓数多久”
+    st.session_state["_last_load_dt"] = _now_cn()
 
 df = pd.DataFrame(raw_rows)
 
@@ -1746,6 +1789,60 @@ df["盈亏比例(%)"] = np.where(
 )
 df.loc[df["持仓成本"] <= 0, "持仓成本"] = np.nan
 
+# 日内动量：和上一次真正刷新比，量比 / 现价是升还是降。
+# 只存内存不落盘——跨会话没有意义。用时间桶判断「这一轮到底刷没刷新」，
+# 同一桶内的重跑（切排序、改成本）沿用上次的箭头，免得箭头一闪就没了。
+def _mo(d) -> str:
+    """动量箭头：只在真的变了的时候出现，平盘什么都不显示。"""
+    d = str(d or "")
+    if d == "up":
+        return '<em class="mo up">↑</em>'
+    if d == "down":
+        return '<em class="mo down">↓</em>'
+    return ""
+
+
+def _mo_txt(d) -> str:
+    """表格里用的纯文本箭头（表格没法只染半个单元格）。"""
+    return {"up": " ↑", "down": " ↓"}.get(str(d or ""), "")
+
+
+def _apply_momentum(frame: pd.DataFrame) -> tuple[pd.Series, pd.Series]:
+    bucket = _cache_bucket()
+    prev: dict = st.session_state.get("_prev_snap") or {}
+    v_out: list[str] = []
+    p_out: list[str] = []
+    now: dict[str, dict] = {}
+
+    for _, r in frame.iterrows():
+        code = str(r["代码"])
+        vol, px = r["量比"], r["现价"]
+        old = prev.get(code)
+        if old and old.get("bucket") == bucket:
+            v_d, p_d = old.get("bv", ""), old.get("bp", "")
+        else:
+            v_d = p_d = ""
+            if old:
+                if pd.notna(vol) and pd.notna(old.get("vol", np.nan)):
+                    d = float(vol) - float(old["vol"])
+                    v_d = "up" if d > 0.005 else ("down" if d < -0.005 else "")
+                if pd.notna(px) and pd.notna(old.get("px", np.nan)):
+                    d = float(px) - float(old["px"])
+                    p_d = "up" if d > 1e-4 else ("down" if d < -1e-4 else "")
+        v_out.append(v_d)
+        p_out.append(p_d)
+        now[code] = {
+            "vol": float(vol) if pd.notna(vol) else np.nan,
+            "px": float(px) if pd.notna(px) else np.nan,
+            "bv": v_d,
+            "bp": p_d,
+            "bucket": bucket,
+        }
+
+    st.session_state["_prev_snap"] = now
+    return pd.Series(v_out, index=frame.index), pd.Series(p_out, index=frame.index)
+
+
 # 均线多空状态：价 > MA5 > MA20 才算多头，反之空头，夹在中间是震荡
 def _trend(row: pd.Series) -> str:
     price, ma5, ma20 = row["现价"], row["MA5"], row["MA20"]
@@ -1759,6 +1856,9 @@ def _trend(row: pd.Series) -> str:
 
 
 df["均线"] = df.apply(_trend, axis=1)
+
+# 箭头：量比、现价各自跟上一轮比
+df["量比动"], df["现价动"] = _apply_momentum(df)
 
 # ----------------------------------------------------------------------------
 # 5b. 信号：均线 / 量能 / 乖离 三条件同时满足
@@ -1849,7 +1949,7 @@ VIEW_COLS = [
 view = df[VIEW_COLS].copy()
 
 # 卡片还要显示「日波动 / 异动倍数」，但表格里不需要这两列，所以单独拼一份给卡片用
-card_view = view.join(df[["波动率", "异动z", "数据源", "备注"]])
+card_view = view.join(df[["波动率", "异动z", "数据源", "备注", "量比动", "现价动"]])
 
 
 # ----------------------------------------------------------------------------
@@ -2139,8 +2239,17 @@ _TABLE_FMT = {
 }
 
 disp = view.copy()
+_MO_COL = {"现价": "现价动", "量比": "量比动"}
 for _col, _spec in _TABLE_FMT.items():
-    disp[_col] = view[_col].map(lambda v, _s=_spec: "—" if pd.isna(v) else _s.format(v))
+    _dcol = _MO_COL.get(_col)
+    if _dcol and _dcol in df.columns:
+        _dirs = df[_dcol].reindex(view.index)   # 箭头列不进 view，免得表格多出两列
+        disp[_col] = [
+            ("—" if pd.isna(v) else _spec.format(v)) + _mo_txt(d)
+            for v, d in zip(view[_col], _dirs)
+        ]
+    else:
+        disp[_col] = view[_col].map(lambda v, _s=_spec: "—" if pd.isna(v) else _s.format(v))
 
 styler = disp.style
 styler = _apply(styler, _pct_color, ["涨跌幅(%)", "盈亏比例(%)"])
@@ -2243,11 +2352,11 @@ def _card_html(row: pd.Series) -> str:
         f'<span class="mcard-tag {tag_cls}">{html.escape(signal)}</span>'
         f"</div>"
         f'<div class="mcard-p">'
-        f'<span class="mcard-px">{_num(row["现价"], 3)}</span>'
+        f'<span class="mcard-px">{_num(row["现价"], 3)}{_mo(row.get("现价动"))}</span>'
         f'<span class="mcard-chg {_tone(chg)}">{_num(chg, 2, plus=True)}%</span>'
         f"</div>"
         f'<div class="mcard-g">'
-        f'<div class="mg"><span>量比</span><b>{_num(row["量比"], 2)}</b></div>'
+        f'<div class="mg"><span>量比</span><b>{_num(row["量比"], 2)}{_mo(row.get("量比动"))}</b></div>'
         f'<div class="mg"><span>乖离</span><b class="{_tone(row["乖离率(%)"])}">{_num(row["乖离率(%)"], 2, plus=True)}%</b></div>'
         f'<div class="mg"><span>成本</span><b>{cost}</b></div>'
         f'<div class="mg"><span>盈亏</span><b class="{_tone(pnl)}">{pnl_txt}{"%" if pnl_txt != "—" else ""}</b></div>'
@@ -2315,9 +2424,10 @@ st.caption("数据来源：akshare（东方财富 / 新浪）。仅供个人盯�
 #    用 st.fragment(run_every=...) 定时触发整页重跑；只在交易时段、且用户没关掉时生效。
 #    缓存桶（_cache_bucket）保证重跑时真的会去拉新数据，而不是命中旧缓存。
 # ----------------------------------------------------------------------------
+
 if (
     st.session_state.get("auto_refresh_on", True)
-    and _market_phase() in ("open", "break")
+    and _market_phase() == "open"
     and hasattr(st, "fragment")
 ):
     _AUTO_SEC = _cache_ttl()
@@ -2326,7 +2436,13 @@ if (
     def _auto_refresh() -> None:
         # 关键：只有“确实过了刷新间隔”才触发整页重跑。
         # 否则每次正常渲染时 fragment 也会立刻 rerun，形成自激死循环（页面永远渲染不出来）。
-        if time.time() - st.session_state.get("_last_load", 0.0) < _AUTO_SEC - 0.5:
+        # 用「开始抓数」的时刻算，而不是抓完的时刻：首屏 13 只日线要几十秒，
+        # 按抓完算会变成刚渲染完立刻又触发，页面永远在转圈。
+        _since = max(
+            st.session_state.get("_load_started", 0.0),
+            st.session_state.get("_last_load", 0.0),
+        )
+        if time.time() - _since < _AUTO_SEC - 0.5:
             return
         try:
             st.rerun(scope="app")     # Streamlit >= 1.37：重跑整个脚本
